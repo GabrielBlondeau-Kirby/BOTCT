@@ -30,6 +30,7 @@
     tokenSize: 96,
     filter: "all",
     railHidden: false,
+    bluffs: [],      // 3 rôles Bons non en jeu montrés au Démon
   });
 
   let state = load();
@@ -72,6 +73,28 @@
     const n = state.tokens.length;
     const pos = circleSlot(n, Math.max(n + 1, state.players));
     state.tokens.push({ uid: uid(), roleId, x: pos.x, y: pos.y, player: "", dead: false, ghostUsed: false });
+    state.bluffs = state.bluffs.filter((id) => id !== roleId); // un rôle en jeu ne peut plus servir de bluff
+  }
+
+  // Bluffs possibles : Villageois puis Étrangers non en jeu, pris dans le(s) script(s) des rôles en jeu
+  function bluffCandidates() {
+    const editions = state.filter !== "all"
+      ? [state.filter]
+      : [...new Set(state.tokens.map((t) => ROLES[t.roleId]).filter((r) => r.team !== "traveller").map((r) => r.edition))];
+    return ["townsfolk", "outsider"].flatMap((team) =>
+      Object.values(ROLES).filter((r) => r.team === team && editions.includes(r.edition) && !inPlay(r.id)));
+  }
+  function toggleBluff(id) {
+    if (state.bluffs.includes(id)) state.bluffs = state.bluffs.filter((b) => b !== id);
+    else if (state.bluffs.length < 3) state.bluffs = [...state.bluffs, id];
+  }
+  function randomBluffs() {
+    const pool = bluffCandidates().filter((r) => r.team === "townsfolk");
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    state.bluffs = pool.slice(0, 3).map((r) => r.id);
   }
   function removeToken(tokenUid) {
     state.tokens = state.tokens.filter((t) => t.uid !== tokenUid);
@@ -194,8 +217,9 @@
 
     const alive = state.tokens.filter((t) => !t.dead && ROLES[t.roleId].team !== "traveller").length;
     const total = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length;
+    const bluffs = state.bluffs.map((id) => ROLES[id].name).join(", ");
     $("#boardStats").innerHTML = state.tokens.length
-      ? `<span><b>${alive}</b> vivants sur ${total}</span><span>Exécution : <b>${Math.ceil(alive / 2)}</b> votes</span>`
+      ? `<span><b>${alive}</b> vivants sur ${total}</span><span>Exécution : <b>${Math.ceil(alive / 2)}</b> votes</span>${bluffs ? `<span>Bluffs : <b>${escapeHtml(bluffs)}</b></span>` : ""}`
       : "";
   }
 
@@ -592,6 +616,7 @@
             </button>
             ${isCurrent ? `
               <p class="rail-text">${escapeHtml(i.text)}</p>
+              ${i.key === "_demoninfo" ? bluffPicker() : ""}
               <button class="btn primary rail-done" data-check="${i.key}">Fait, étape suivante</button>` : ""}
           </li>`;
         }).join("")}
@@ -605,9 +630,63 @@
     if (cur) cur.scrollIntoView({ block: "nearest" });
   }
 
+  function bluffPicker() {
+    const slots = [0, 1, 2].map((n) => {
+      const r = ROLES[state.bluffs[n]];
+      return r
+        ? `<button class="bluff-slot filled team-${r.team}" data-bluff="${r.id}" title="Retirer"><span class="mini team-${r.team}">${monogram(r.name)}</span>${escapeHtml(r.name)}</button>`
+        : `<span class="bluff-slot">Bluff ${n + 1}</span>`;
+    }).join("");
+    const candidates = bluffCandidates();
+    const group = (team) => candidates.filter((r) => r.team === team).map((r) => `
+      <button class="chip team-${r.team} ${state.bluffs.includes(r.id) ? "on" : ""}" data-bluff="${r.id}"
+        ${!state.bluffs.includes(r.id) && state.bluffs.length >= 3 ? "disabled" : ""}>${escapeHtml(r.name)}</button>`).join("");
+    return `
+      <div class="bluffs">
+        <div class="bluff-slots">${slots}</div>
+        <p class="bluff-label team-text-townsfolk">Villageois non en jeu</p>
+        <div class="chips">${group("townsfolk") || `<span class="hint">Aucun</span>`}</div>
+        <p class="bluff-label team-text-outsider">Étrangers non en jeu</p>
+        <div class="chips">${group("outsider") || `<span class="hint">Aucun</span>`}</div>
+        ${inPlay("drunk") ? `<p class="hint">Évitez le Villageois que croit être l'Ivrogne.</p>` : ""}
+        <div class="bluff-actions">
+          <button class="btn small" data-bluff-random>Tirer au hasard</button>
+          <button class="btn small primary" data-bluff-show ${state.bluffs.length ? "" : "disabled"}>Montrer au Démon</button>
+        </div>
+      </div>`;
+  }
+
+  // Écran à montrer au Démon
+  const showDialog = $("#bluffShow");
+  function openBluffShow() {
+    $("#bluffShowBody").innerHTML = `
+      <p class="show-title">Ces personnages ne sont pas en jeu</p>
+      <div class="show-tokens">
+        ${state.bluffs.map((id) => {
+          const r = ROLES[id];
+          return `<div class="show-role"><div class="show-token">${tokenHtml(r)}</div>
+            <p class="show-name">${escapeHtml(r.name)}</p><p class="show-ability">${escapeHtml(r.ability)}</p></div>`;
+        }).join("")}
+      </div>
+      <button class="btn" data-show-close>Fermer</button>`;
+    showDialog.showModal();
+  }
+  showDialog.addEventListener("click", (e) => {
+    if (e.target.closest("[data-show-close]")) showDialog.close();
+  });
+
   rail.addEventListener("click", (e) => {
     const check = e.target.closest("[data-check]");
-    if (check) {
+    const bluff = e.target.closest("[data-bluff]");
+    if (bluff) {
+      toggleBluff(bluff.dataset.bluff);
+      commit();
+    } else if (e.target.closest("[data-bluff-random]")) {
+      randomBluffs();
+      commit();
+    } else if (e.target.closest("[data-bluff-show]")) {
+      openBluffShow();
+    } else if (check) {
       const k = check.dataset.check;
       state.nightChecks = state.nightChecks.includes(k) ? state.nightChecks.filter((x) => x !== k) : [...state.nightChecks, k];
       commit();

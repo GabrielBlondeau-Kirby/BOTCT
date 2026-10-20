@@ -408,6 +408,58 @@ body:not(.rail-open) .night-rail {
   .token.waking .token-face { animation: none; box-shadow: 0 0 0 4px var(--gold), inset 0 0 0 calc(var(--token) * 0.05) var(--team); }
 }
 
+/* Bluffs du Démon */
+.bluffs { margin: 0 10px 12px 44px; display: grid; gap: 8px; }
+.bluff-slots { display: grid; gap: 6px; }
+.bluff-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+  font-size: 14px;
+  background: transparent;
+  text-align: left;
+}
+.bluff-slot.filled { border-style: solid; border-color: var(--team); color: var(--text); font-weight: 600; }
+.bluff-slot .mini { width: 30px; height: 30px; font-size: 11px; }
+.bluff-label { margin: 4px 0 0; font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+.chip:disabled { opacity: 0.35; cursor: not-allowed; }
+.bluff-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.bluff-show {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: none;
+  padding: 0;
+  background: radial-gradient(circle at 50% 40%, #1d1726, var(--bg) 75%);
+  color: var(--text);
+}
+.bluff-show::backdrop { background: var(--bg); }
+.bluff-show-inner {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: max(24px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  text-align: center;
+}
+.show-title { margin: 0; font-family: var(--font-display); font-size: clamp(22px, 3.4vw, 36px); letter-spacing: 0.06em; color: var(--gold); text-wrap: balance; }
+.show-tokens { display: flex; flex-wrap: wrap; justify-content: center; gap: 40px; }
+.show-role { width: 230px; display: grid; justify-items: center; align-content: start; gap: 10px; }
+.show-token { --token: 170px; width: var(--token); height: var(--token); }
+.show-name { margin: 0; font-family: var(--font-display); font-size: 22px; }
+.show-ability { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.35; }
+
 /* ───────── Panneau latéral ───────── */
 .panel {
   position: absolute;
