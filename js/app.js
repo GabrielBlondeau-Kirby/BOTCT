@@ -1077,5 +1077,11 @@
     renderPanel();
   }
 
+  // Ciel étoilé : positions fixes tirées une fois
+  $("#stars").innerHTML = Array.from({ length: 70 }, () => {
+    const s = (Math.random() * 1.8 + 1).toFixed(1);
+    return `<i style="left:${(Math.random() * 100).toFixed(2)}%;top:${(Math.random() * 100).toFixed(2)}%;width:${s}px;height:${s}px;--d:${(3 + Math.random() * 4).toFixed(1)}s;--delay:-${(Math.random() * 6).toFixed(1)}s"></i>`;
+  }).join("");
+
   render();
 })();
