@@ -29,6 +29,7 @@
     nightChecks: [],
     tokenSize: 96,
     filter: "all",
+    railHidden: false,
   });
 
   let state = load();
@@ -162,12 +163,13 @@
     board.style.setProperty("--token", state.tokenSize + "px");
     board.querySelectorAll(".token, .reminder").forEach((el) => el.remove());
     $("#boardEmpty").hidden = state.tokens.length > 0;
+    const waking = currentNightStep();
 
     const frag = document.createDocumentFragment();
     for (const t of state.tokens) {
       const role = ROLES[t.roleId];
       const el = document.createElement("div");
-      el.className = "token" + (t.dead ? " is-dead" : "");
+      el.className = "token" + (t.dead ? " is-dead" : "") + (waking && waking.key === t.uid ? " waking" : "");
       el.dataset.uid = t.uid;
       el.style.left = t.x + "%";
       el.style.top = t.y + "%";
@@ -496,8 +498,8 @@
       ${groups || `<p class="hint">Aucun rôle trouvé.</p>`}`;
   }
 
-  function nightPanel() {
-    const first = nightTab === null ? isFirstNight() : nightTab === "first";
+  // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu
+  function nightItems(first) {
     const order = first ? FIRST_NIGHT : OTHER_NIGHT;
     const bigGame = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length >= 7;
     const items = [];
@@ -513,6 +515,21 @@
         items.push({ key: t.uid, role, token: t, text });
       }
     }
+    return items;
+  }
+  const nightItemName = (i) => i.special
+    ? escapeHtml(i.name)
+    : `<span class="team-text-${i.role.team}">${escapeHtml(i.role.name)}</span>${i.token.player ? ` · ${escapeHtml(i.token.player)}` : ""}${i.token.dead ? ` <em>(mort)</em>` : ""}`;
+
+  // Étape en cours : la première non cochée de la nuit actuelle
+  function currentNightStep() {
+    if (!isNight() || !state.tokens.length) return null;
+    return nightItems(isFirstNight()).find((i) => !state.nightChecks.includes(i.key)) || null;
+  }
+
+  function nightPanel() {
+    const first = nightTab === null ? isFirstNight() : nightTab === "first";
+    const items = nightItems(first);
     const roleItems = items.filter((i) => !i.special).length;
     return `
       <div class="tabs" role="tablist">
@@ -528,7 +545,7 @@
           <li class="night-item ${i.special ? "special" : ""} ${done ? "done" : ""} ${i.token?.dead ? "dead" : ""}">
             <button class="night-check" data-check="${i.key}" aria-pressed="${done}" aria-label="Marquer comme fait">${done ? "✓" : n + 1}</button>
             <div>
-              <p class="night-name">${i.special ? escapeHtml(i.name) : `<span class="team-text-${i.role.team}">${escapeHtml(i.role.name)}</span>${i.token.player ? ` · ${escapeHtml(i.token.player)}` : ""}${i.token.dead ? ` <em>(mort)</em>` : ""}`}</p>
+              <p class="night-name">${nightItemName(i)}</p>
               <p class="night-text">${escapeHtml(i.text)}</p>
             </div>
           </li>`;
@@ -536,6 +553,71 @@
       </ol>
       ${state.nightChecks.length ? `<button class="btn ghost small" data-clear-checks>Décocher tout</button>` : ""}`;
   }
+
+  // ───────── Suivi des réveils (encart de nuit) ─────────
+  const rail = $("#nightRail");
+  function renderRail() {
+    const show = isNight() && state.tokens.length > 0;
+    rail.hidden = !show;
+    document.body.classList.toggle("rail-open", show && !state.railHidden);
+    if (!show) return;
+    const items = nightItems(isFirstNight());
+    const doneCount = items.filter((i) => state.nightChecks.includes(i.key)).length;
+    const current = currentNightStep();
+    const night = Math.floor(state.phase / 2) + 1;
+
+    if (state.railHidden) {
+      rail.innerHTML = `<button class="rail-tab" data-rail-toggle aria-label="Afficher le suivi des réveils">
+        ☾ <b>${doneCount}/${items.length}</b>${current ? ` · ${current.special ? escapeHtml(current.name) : escapeHtml(current.role.name)}` : ""}</button>`;
+      return;
+    }
+    rail.innerHTML = `
+      <div class="rail-head">
+        <div>
+          <p class="rail-title">☾ Nuit ${night}</p>
+          <p class="rail-sub">${isFirstNight() ? "Première nuit" : "Autres nuits"} · ${doneCount}/${items.length} étapes</p>
+        </div>
+        <button class="icon-btn" data-rail-toggle aria-label="Réduire le suivi des réveils" title="Réduire">‹</button>
+      </div>
+      <div class="rail-progress"><span style="width:${items.length ? (doneCount / items.length) * 100 : 0}%"></span></div>
+      <ol class="rail-list">
+        ${items.map((i, n) => {
+          const done = state.nightChecks.includes(i.key);
+          const isCurrent = current && i.key === current.key;
+          return `
+          <li class="rail-item ${done ? "done" : ""} ${isCurrent ? "current" : ""} ${i.special ? "special" : ""} ${i.token?.dead ? "dead" : ""}">
+            <button class="rail-row" data-check="${i.key}" aria-pressed="${done}">
+              <span class="rail-num">${done ? "✓" : n + 1}</span>
+              <span class="rail-name">${nightItemName(i)}</span>
+            </button>
+            ${isCurrent ? `
+              <p class="rail-text">${escapeHtml(i.text)}</p>
+              <button class="btn primary rail-done" data-check="${i.key}">Fait, étape suivante</button>` : ""}
+          </li>`;
+        }).join("")}
+      </ol>
+      ${!current ? `
+        <div class="rail-end">
+          <p>Tous les réveils sont faits.</p>
+          <button class="btn primary" data-next-phase>Passer au Jour ${night}</button>
+        </div>` : ""}`;
+    const cur = rail.querySelector(".rail-item.current");
+    if (cur) cur.scrollIntoView({ block: "nearest" });
+  }
+
+  rail.addEventListener("click", (e) => {
+    const check = e.target.closest("[data-check]");
+    if (check) {
+      const k = check.dataset.check;
+      state.nightChecks = state.nightChecks.includes(k) ? state.nightChecks.filter((x) => x !== k) : [...state.nightChecks, k];
+      commit();
+    } else if (e.target.closest("[data-rail-toggle]")) {
+      state.railHidden = !state.railHidden;
+      commit();
+    } else if (e.target.closest("[data-next-phase]")) {
+      setPhase(state.phase + 1);
+    }
+  });
 
   function rulesPanel() {
     return `<div class="rules">${RULES.map((r, i) => `
@@ -635,7 +717,8 @@
     document.body.classList.remove("is-day");
     commit();
   });
-  window.addEventListener("resize", () => placeReminders());
+  // le plateau change de largeur quand l'encart de nuit s'ouvre ou se ferme
+  new ResizeObserver(() => placeReminders()).observe(board);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !sheet.open && panel.classList.contains("open")) closePanel();
   });
@@ -645,6 +728,7 @@
     $("#roleCount").textContent = state.tokens.length;
     $("#sizeRange").value = state.tokenSize;
     document.body.classList.toggle("is-day", !isNight());
+    renderRail();
     renderBoard();
     renderPanel();
   }

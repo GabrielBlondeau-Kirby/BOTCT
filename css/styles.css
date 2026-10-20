@@ -317,6 +317,97 @@ body.is-day .board {
 .reminder.selected { box-shadow: 0 0 0 2px var(--gold), 0 3px 10px rgba(0, 0, 0, 0.5), inset 0 0 0 3px var(--team); z-index: 9; }
 .reminder.selected .rem-del { display: grid; }
 
+/* ───────── Suivi des réveils ───────── */
+.night-rail[hidden] { display: none; }
+.night-rail {
+  flex: none;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 14px 14px 16px max(14px, env(safe-area-inset-left, 0px));
+  overflow-y: auto;
+  z-index: 5;
+}
+body:not(.rail-open) .night-rail {
+  width: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  overflow: visible;
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  top: 12px;
+}
+.rail-tab {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--gold);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+  box-shadow: var(--shadow);
+}
+.rail-tab b { color: var(--gold); font-variant-numeric: tabular-nums; }
+.rail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.rail-title { margin: 0; font-family: var(--font-display); font-size: 18px; letter-spacing: 0.06em; color: var(--gold); }
+.rail-sub { margin: 2px 0 0; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.rail-progress { height: 4px; border-radius: 999px; background: var(--surface-3); margin: 10px 0 8px; overflow: hidden; }
+.rail-progress span { display: block; height: 100%; background: var(--gold); transition: width 0.25s; }
+.rail-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.rail-item { border-radius: 10px; }
+.rail-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.rail-row:hover { background: var(--surface-2); }
+.rail-num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.rail-name { min-width: 0; font-weight: 600; line-height: 1.25; }
+.rail-name em { color: var(--muted); font-weight: 400; }
+.rail-item.special .rail-name { font-family: var(--font-display); font-weight: 500; letter-spacing: 0.04em; color: var(--gold); font-size: 15px; }
+.rail-item.done { opacity: 0.45; }
+.rail-item.done .rail-num { background: var(--gold); border-color: var(--gold); color: #1a1208; }
+.rail-item.dead .rail-name span { text-decoration: line-through; }
+.rail-item.current {
+  background: var(--surface-2);
+  border: 1px solid var(--gold);
+  padding-bottom: 10px;
+  margin: 4px 0;
+}
+.rail-item.current .rail-num { background: var(--gold-soft); border-color: var(--gold); color: var(--gold); }
+.rail-text { margin: 0 10px 10px 44px; color: #d9d0bf; font-size: 15.5px; line-height: 1.4; }
+.rail-done { margin-left: 44px; }
+.rail-end { margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--gold-soft); text-align: center; display: grid; gap: 8px; justify-items: center; }
+.rail-end p { margin: 0; }
+
+.token.waking .token-face { animation: wake 1.6s ease-in-out infinite; }
+@keyframes wake {
+  0%, 100% { box-shadow: 0 0 0 3px var(--gold), 0 0 16px rgba(214, 171, 92, 0.45), inset 0 0 0 calc(var(--token) * 0.05) var(--team); }
+  50% { box-shadow: 0 0 0 5px var(--gold), 0 0 34px rgba(214, 171, 92, 0.8), inset 0 0 0 calc(var(--token) * 0.05) var(--team); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .token.waking .token-face { animation: none; box-shadow: 0 0 0 4px var(--gold), inset 0 0 0 calc(var(--token) * 0.05) var(--team); }
+}
+
 /* ───────── Panneau latéral ───────── */
 .panel {
   position: absolute;
@@ -591,6 +682,7 @@ table.dist thead th { color: var(--muted); font-weight: 400; }
 .sheet-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; }
 
 @media (max-width: 760px) {
+  body.rail-open .night-rail { position: absolute; left: 0; right: 0; bottom: 0; width: auto; max-height: 42%; border-right: none; border-top: 1px solid var(--line); box-shadow: var(--shadow); }
   .topbar { gap: 8px; }
   .actions { margin-left: 0; width: 100%; }
   .size-ctl, .sep { display: none; }
