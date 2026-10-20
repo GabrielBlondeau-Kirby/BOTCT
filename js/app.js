@@ -24,7 +24,7 @@
   const defaultState = () => ({
     players: 8,
     tokens: [],      // { uid, roleId, x, y, player, dead, ghostUsed }
-    reminders: [],   // { uid, label, roleId, x, y }
+    reminders: [],   // { uid, label, roleId (rôle d'origine, null si générique), tokenUid (jeton porteur) }
     phase: 0,        // 0 = Nuit 1, 1 = Jour 1, 2 = Nuit 2…
     nightChecks: [],
     tokenSize: 96,
@@ -37,6 +37,7 @@
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (saved && Array.isArray(saved.tokens)) {
         saved.tokens = saved.tokens.filter((t) => ROLES[t.roleId]);
+        saved.reminders = (saved.reminders || []).filter((r) => saved.tokens.some((t) => t.uid === r.tokenUid));
         return { ...defaultState(), ...saved };
       }
     } catch (e) { /* stockage indisponible */ }
@@ -63,16 +64,6 @@
   function arrangeCircle() {
     const n = state.tokens.length;
     state.tokens.forEach((t, i) => Object.assign(t, circleSlot(i, n)));
-    // les rappels suivent leur jeton d'origine s'il existe
-    state.reminders.forEach((r, i) => {
-      const owner = state.tokens.find((t) => t.uid === r.tokenUid);
-      if (owner) {
-        const dx = 50 - owner.x, dy = 51 - owner.y, d = Math.hypot(dx, dy) || 1;
-        const k = 9 + (i % 3) * 5;
-        r.x = owner.x + (dx / d) * k;
-        r.y = owner.y + (dy / d) * k;
-      }
-    });
     commit();
   }
 
@@ -83,15 +74,72 @@
   }
   function removeToken(tokenUid) {
     state.tokens = state.tokens.filter((t) => t.uid !== tokenUid);
-    state.reminders = state.reminders.filter((r) => r.tokenUid !== tokenUid);
+    // retire les rappels portés par ce jeton, et ceux d'un rôle qui n'est plus en jeu
+    state.reminders = state.reminders.filter((r) =>
+      r.tokenUid !== tokenUid && (!r.roleId || inPlay(r.roleId)));
   }
-  function addReminder(token, label) {
-    const count = state.reminders.filter((r) => r.tokenUid === token.uid).length;
-    const dx = 50 - token.x, dy = 51 - token.y, d = Math.hypot(dx, dy) || 1;
-    const k = 9 + count * 5.5;
-    state.reminders.push({
-      uid: uid(), label, roleId: token.roleId, tokenUid: token.uid,
-      x: token.x + (dx / d) * k + (count % 2 ? 2 : -2), y: token.y + (dy / d) * k,
+
+  // Un rappel de rôle existe en autant d'exemplaires que dans la liste du rôle
+  // (souvent 1) : le poser ailleurs déplace le plus ancien.
+  const stock = (roleId, label) => ROLES[roleId].reminders.filter((l) => l === label).length;
+  const sameReminder = (r, roleId, label) => r.roleId === roleId && r.label === label;
+
+  function toggleReminder(token, roleId, label) {
+    const here = state.reminders.find((r) => r.tokenUid === token.uid && sameReminder(r, roleId, label));
+    if (here) {
+      state.reminders = state.reminders.filter((r) => r !== here);
+      return;
+    }
+    if (roleId) {
+      const placed = state.reminders.filter((r) => sameReminder(r, roleId, label));
+      if (placed.length >= stock(roleId, label)) {
+        const moved = placed[0];
+        state.reminders = state.reminders.filter((r) => r !== moved);
+        state.reminders.push({ ...moved, tokenUid: token.uid });
+        return;
+      }
+    }
+    state.reminders.push({ uid: uid(), label, roleId, tokenUid: token.uid });
+  }
+
+  // Position des rappels : en arc autour de leur jeton, côté centre de la table.
+  function reminderPositions() {
+    const w = board.clientWidth, h = board.clientHeight;
+    const size = Math.max(46, state.tokenSize * 0.52);
+    const pos = {};
+    for (const t of state.tokens) {
+      const mine = state.reminders.filter((r) => r.tokenUid === t.uid);
+      if (!mine.length) continue;
+      const cx = (t.x / 100) * w, cy = (t.y / 100) * h;
+      const base = Math.atan2(0.51 * h - cy, 0.5 * w - cx);
+      let i = 0, ring = 0;
+      while (i < mine.length) {
+        const R = state.tokenSize / 2 + size / 2 + 2 + ring * (size + 4);
+        const step = 2 * Math.asin(Math.min(1, (size + 4) / (2 * R)));
+        const perRing = Math.max(1, Math.floor((2 * Math.PI) / step));
+        const batch = mine.slice(i, i + perRing);
+        batch.forEach((r, k) => {
+          const angle = base + (k - (batch.length - 1) / 2) * step;
+          pos[r.uid] = { x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) };
+        });
+        i += perRing;
+        ring++;
+      }
+    }
+    return pos;
+  }
+  // Taille du texte d'un rappel, relative au diamètre, pour que le mot le plus long tienne
+  const remFontFactor = (label) => {
+    const longest = Math.max(...label.split(/\s+/).map((w) => w.length));
+    return Math.min(0.21, 0.8 / (longest * 0.6)).toFixed(3);
+  };
+  function placeReminders(skipUid) {
+    const pos = reminderPositions();
+    board.querySelectorAll(".reminder").forEach((el) => {
+      const p = pos[el.dataset.uid];
+      if (!p || el.dataset.uid === skipUid) return;
+      el.style.left = p.x + "px";
+      el.style.top = p.y + "px";
     });
   }
 
@@ -135,13 +183,12 @@
       const el = document.createElement("div");
       el.className = "reminder" + (role ? " team-" + role.team : " generic");
       el.dataset.uid = r.uid;
-      el.style.left = r.x + "%";
-      el.style.top = r.y + "%";
       el.title = role ? `${role.name} : ${r.label}` : r.label;
-      el.innerHTML = `${role ? sigil(role.team, "rem-sigil") : ""}<span>${escapeHtml(r.label)}</span><button class="rem-del" aria-label="Retirer le rappel">✕</button>`;
+      el.innerHTML = `${role ? sigil(role.team, "rem-sigil") : ""}<span style="--f:${remFontFactor(r.label)}">${escapeHtml(r.label)}</span><button class="rem-del" aria-label="Retirer le rappel">✕</button>`;
       frag.appendChild(el);
     }
     board.appendChild(frag);
+    placeReminders();
 
     const alive = state.tokens.filter((t) => !t.dead && ROLES[t.roleId].team !== "traveller").length;
     const total = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length;
@@ -156,11 +203,15 @@
     const el = e.target.closest(".token, .reminder");
     justDragged = false;
     if (!el || e.target.closest(".rem-del")) return;
-    const list = el.classList.contains("token") ? state.tokens : state.reminders;
-    const item = list.find((i) => i.uid === el.dataset.uid);
+    const isToken = el.classList.contains("token");
+    const item = (isToken ? state.tokens : state.reminders).find((i) => i.uid === el.dataset.uid);
     if (!item) return;
     const rect = board.getBoundingClientRect();
-    drag = { el, item, rect, startX: e.clientX, startY: e.clientY, ox: item.x, oy: item.y, moved: false };
+    drag = {
+      el, item, rect, isToken, startX: e.clientX, startY: e.clientY, moved: false,
+      // jetons en % du plateau, rappels en pixels
+      ox: isToken ? item.x : parseFloat(el.style.left), oy: isToken ? item.y : parseFloat(el.style.top),
+    };
     el.setPointerCapture(e.pointerId);
     el.classList.add("dragging");
   });
@@ -169,18 +220,46 @@
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
     drag.moved = true;
-    drag.item.x = Math.min(98, Math.max(2, drag.ox + (dx / drag.rect.width) * 100));
-    drag.item.y = Math.min(98, Math.max(2, drag.oy + (dy / drag.rect.height) * 100));
-    drag.el.style.left = drag.item.x + "%";
-    drag.el.style.top = drag.item.y + "%";
+    if (drag.isToken) {
+      drag.item.x = Math.min(98, Math.max(2, drag.ox + (dx / drag.rect.width) * 100));
+      drag.item.y = Math.min(98, Math.max(2, drag.oy + (dy / drag.rect.height) * 100));
+      drag.el.style.left = drag.item.x + "%";
+      drag.el.style.top = drag.item.y + "%";
+      placeReminders();
+    } else {
+      drag.el.style.left = drag.ox + dx + "px";
+      drag.el.style.top = drag.oy + dy + "px";
+      const target = magnetTarget(drag.ox + dx, drag.oy + dy);
+      board.querySelectorAll(".token.magnet").forEach((t) => t.dataset.uid !== target?.uid && t.classList.remove("magnet"));
+      if (target) board.querySelector(`.token[data-uid="${target.uid}"]`).classList.add("magnet");
+    }
   });
+  // Jeton le plus proche du point (px), s'il est assez près pour « aimanter » le rappel
+  function magnetTarget(x, y) {
+    let best = null, bestD = state.tokenSize * 0.9;
+    for (const t of state.tokens) {
+      const d = Math.hypot((t.x / 100) * board.clientWidth - x, (t.y / 100) * board.clientHeight - y);
+      if (d < bestD) { best = t; bestD = d; }
+    }
+    return best;
+  }
   const endDrag = () => {
     if (!drag) return;
-    const { el, item, moved } = drag;
+    const { el, item, moved, isToken } = drag;
     el.classList.remove("dragging");
     drag = null;
     justDragged = moved;
-    if (moved) save();
+    if (!moved) return;
+    if (isToken) { save(); return; }
+    board.querySelectorAll(".token.magnet").forEach((t) => t.classList.remove("magnet"));
+    const target = magnetTarget(parseFloat(el.style.left), parseFloat(el.style.top));
+    const duplicate = target && state.reminders.some((r) =>
+      r !== item && r.tokenUid === target.uid && sameReminder(r, item.roleId, item.label));
+    if (target && target.uid !== item.tokenUid && !duplicate) {
+      state.reminders = state.reminders.filter((r) => r !== item);
+      state.reminders.push({ ...item, tokenUid: target.uid });
+    }
+    commit(); // sinon le rappel revient se coller à son jeton
   };
   // L'ouverture se fait au « click » : au doigt, un clic suit le relâchement
   // et refermerait aussitôt une fiche ouverte dès le pointerup.
@@ -226,8 +305,29 @@
       role.firstNight && `<li><b>1re nuit :</b> ${escapeHtml(role.firstNight)}</li>`,
       role.otherNight && `<li><b>Autres nuits :</b> ${escapeHtml(role.otherNight)}</li>`,
     ].filter(Boolean).join("");
-    const reminderChips = (labels, cls) => labels.map((l) =>
-      `<button class="chip ${cls}" data-add-reminder="${escapeHtml(l)}">+ ${escapeHtml(l)}</button>`).join("");
+    const holderName = (r) => {
+      const h = state.tokens.find((x) => x.uid === r.tokenUid);
+      return h ? h.player || ROLES[h.roleId].name : "";
+    };
+    const chip = (roleId, label, cls) => {
+      const on = state.reminders.some((r) => r.tokenUid === t.uid && sameReminder(r, roleId, label));
+      const elsewhere = roleId && !on && state.reminders.filter((r) => sameReminder(r, roleId, label)).length >= stock(roleId, label)
+        ? state.reminders.find((r) => sameReminder(r, roleId, label)) : null;
+      return `<button class="chip ${cls} ${on ? "on" : ""}" data-rem-role="${roleId || ""}" data-rem-label="${escapeHtml(label)}" aria-pressed="${on}">
+        ${on ? "✓" : "+"} ${escapeHtml(label)}${elsewhere ? `<small>sur ${escapeHtml(holderName(elsewhere))}</small>` : ""}</button>`;
+    };
+    // rappels des rôles en jeu (celui du jeton d'abord), puis génériques
+    const roleIds = [...new Set([t.roleId, ...state.tokens.map((x) => x.roleId)])].filter((id) => ROLES[id].reminders.length);
+    const customs = state.reminders.filter((r) => r.tokenUid === t.uid && !r.roleId && !GENERIC_REMINDERS.includes(r.label));
+    const reminderGroups = roleIds.map((id) => `
+      <div class="chip-group">
+        <span class="chip-group-name team-text-${ROLES[id].team}">${escapeHtml(ROLES[id].name)}</span>
+        <div class="chips">${[...new Set(ROLES[id].reminders)].map((l) => chip(id, l, "team-" + ROLES[id].team)).join("")}</div>
+      </div>`).join("") + `
+      <div class="chip-group">
+        <span class="chip-group-name">Génériques</span>
+        <div class="chips">${[...GENERIC_REMINDERS, ...customs.map((r) => r.label)].map((l) => chip(null, l, "generic")).join("")}</div>
+      </div>`;
 
     $("#sheetBody").innerHTML = `
       <button class="icon-btn sheet-close" data-close aria-label="Fermer">✕</button>
@@ -256,11 +356,8 @@
       </div>
 
       <div class="sheet-section">
-        <h3>Ajouter un rappel</h3>
-        <div class="chips">
-          ${reminderChips(role.reminders, "team-" + role.team)}
-          ${reminderChips(GENERIC_REMINDERS.filter((g) => !role.reminders.includes(g)), "generic")}
-        </div>
+        <h3>Rappels sur ce joueur</h3>
+        ${reminderGroups}
         <form class="custom-rem" id="customRem">
           <input type="text" id="customRemInput" placeholder="Rappel personnalisé…" maxlength="24">
           <button class="btn" type="submit">Ajouter</button>
@@ -278,17 +375,15 @@
     if (e.target === sheet || e.target.closest("[data-close]")) { sheet.close(); return; }
     if (!t) return;
     const toggle = e.target.closest("[data-toggle]");
-    const addRem = e.target.closest("[data-add-reminder]");
+    const remChip = e.target.closest("[data-rem-label]");
     if (toggle) {
       const key = toggle.dataset.toggle;
       t[key] = !t[key];
       if (key === "dead" && !t.dead) t.ghostUsed = false;
       commit(); renderSheet();
-    } else if (addRem) {
-      addReminder(t, addRem.dataset.addReminder);
-      commit();
-      addRem.classList.add("flash");
-      setTimeout(() => addRem.classList.remove("flash"), 400);
+    } else if (remChip) {
+      toggleReminder(t, remChip.dataset.remRole || null, remChip.dataset.remLabel);
+      commit(); renderSheet();
     } else if (e.target.closest("[data-remove]")) {
       removeToken(t.uid);
       sheet.close();
@@ -304,10 +399,11 @@
     e.preventDefault();
     const input = $("#customRemInput");
     const t = state.tokens.find((x) => x.uid === sheetUid);
-    if (t && input.value.trim()) {
-      addReminder(t, input.value.trim());
-      input.value = "";
-      commit();
+    const label = input.value.trim();
+    if (t && label && !state.reminders.some((r) => r.tokenUid === t.uid && sameReminder(r, null, label))) {
+      toggleReminder(t, null, label);
+      commit(); renderSheet();
+      $("#customRemInput").focus();
     }
   });
 
@@ -512,6 +608,7 @@
   $("#sizeRange").addEventListener("input", (e) => {
     state.tokenSize = Number(e.target.value);
     board.style.setProperty("--token", state.tokenSize + "px");
+    placeReminders();
     save();
   });
   // Confirmation dans la page (les fenêtres confirm() ne sont pas toujours disponibles)
@@ -538,6 +635,7 @@
     document.body.classList.remove("is-day");
     commit();
   });
+  window.addEventListener("resize", () => placeReminders());
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !sheet.open && panel.classList.contains("open")) closePanel();
   });

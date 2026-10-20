@@ -292,13 +292,14 @@ body.is-day .board {
 }
 .reminder.generic { --team: #8f8473; }
 .reminder span {
-  font-size: 10.5px;
+  font-size: calc(max(46px, var(--token) * 0.52) * var(--f, 0.2));
   font-weight: 600;
   line-height: 1.05;
-  overflow-wrap: anywhere;
 }
 .reminder .rem-sigil { width: 32%; height: 32%; color: color-mix(in srgb, var(--team) 75%, #000); flex: none; }
-.reminder.dragging { cursor: grabbing; z-index: 11; }
+.reminder:not(.dragging) { transition: left 0.18s ease, top 0.18s ease; }
+.reminder.dragging { cursor: grabbing; z-index: 11; transform: translate(-50%, -50%) scale(1.1); }
+.token.magnet .token-face { box-shadow: 0 0 0 4px var(--gold), 0 0 24px rgba(214, 171, 92, 0.6), inset 0 0 0 calc(var(--token) * 0.05) var(--team); }
 .rem-del {
   position: absolute;
   top: -6px;
@@ -582,7 +583,10 @@ table.dist thead th { color: var(--muted); font-weight: 400; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips .chip { border-color: color-mix(in srgb, var(--team, #8f8473) 60%, transparent); }
 .chips .chip.generic { --team: #8f8473; }
-.chip.flash { background: var(--gold); color: #1a1208; }
+.chip.on { background: color-mix(in srgb, var(--team, var(--gold)) 28%, transparent); border-color: var(--team, var(--gold)); }
+.chip small { margin-left: 6px; color: var(--muted); font-size: 12px; }
+.chip-group { display: grid; gap: 6px; margin-bottom: 12px; }
+.chip-group-name { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .custom-rem { display: flex; gap: 8px; margin-top: 10px; }
 .sheet-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; }
 
