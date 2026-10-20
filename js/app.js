@@ -31,6 +31,9 @@
     filter: "all",
     railHidden: false,
     bluffs: [],      // 3 rôles Bons non en jeu montrés au Démon
+    log: [],         // journal : { id, phase, type, ...données au moment de l'événement }
+    setup: null,     // composition figée à la fin de la 1re nuit
+    ended: null,     // { winner: "good" | "evil", phase }
   });
 
   let state = load();
@@ -53,6 +56,19 @@
   const inPlay = (roleId) => state.tokens.some((t) => t.roleId === roleId);
   const isFirstNight = () => state.phase === 0;
   const isNight = () => state.phase % 2 === 0;
+
+  // ───────── Journal ─────────
+  // Chaque événement garde le nom du joueur et le rôle au moment où il a lieu.
+  const who = (t) => t ? { roleId: t.roleId, player: t.player || "" } : null;
+  const whoText = (w) => {
+    if (!w) return "?";
+    const name = ROLES[w.roleId]?.name || "?";
+    return w.player ? `${w.player} (${name})` : name;
+  };
+  function logEvent(type, data = {}) {
+    state.log.push({ id: uid(), phase: state.phase, type, ...data });
+  }
+  const tokenByUid = (u) => state.tokens.find((t) => t.uid === u);
 
   // ───────── Plateau ─────────
   const board = $("#board");
@@ -112,6 +128,7 @@
     const here = state.reminders.find((r) => r.tokenUid === token.uid && sameReminder(r, roleId, label));
     if (here) {
       state.reminders = state.reminders.filter((r) => r !== here);
+      logEvent("rem-remove", { label, roleId, on: who(token) });
       return;
     }
     if (roleId) {
@@ -120,10 +137,12 @@
         const moved = placed[0];
         state.reminders = state.reminders.filter((r) => r !== moved);
         state.reminders.push({ ...moved, tokenUid: token.uid });
+        logEvent("rem-move", { label, roleId, from: who(tokenByUid(moved.tokenUid)), on: who(token) });
         return;
       }
     }
     state.reminders.push({ uid: uid(), label, roleId, tokenUid: token.uid });
+    logEvent("rem-add", { label, roleId, on: who(token) });
   }
 
   // Position des rappels : en arc autour de leur jeton, côté centre de la table.
@@ -284,6 +303,7 @@
     if (target && target.uid !== item.tokenUid && !duplicate) {
       state.reminders = state.reminders.filter((r) => r !== item);
       state.reminders.push({ ...item, tokenUid: target.uid });
+      logEvent("rem-move", { label: item.label, roleId: item.roleId, from: who(tokenByUid(item.tokenUid)), on: who(target) });
     }
     commit(); // sinon le rappel revient se coller à son jeton
   };
@@ -306,6 +326,8 @@
     }
     if (del) {
       const uidToRemove = del.parentElement.dataset.uid;
+      const removed = state.reminders.find((r) => r.uid === uidToRemove);
+      if (removed) logEvent("rem-remove", { label: removed.label, roleId: removed.roleId, on: who(tokenByUid(removed.tokenUid)) });
       state.reminders = state.reminders.filter((r) => r.uid !== uidToRemove);
       commit();
     } else {
@@ -406,11 +428,14 @@
       const key = toggle.dataset.toggle;
       t[key] = !t[key];
       if (key === "dead" && !t.dead) t.ghostUsed = false;
+      if (key === "dead") logEvent(t.dead ? "death" : "revive", { who: who(t) });
+      if (key === "ghostUsed") logEvent(t.ghostUsed ? "ghost" : "ghost-back", { who: who(t) });
       commit(); renderSheet();
     } else if (remChip) {
       toggleReminder(t, remChip.dataset.remRole || null, remChip.dataset.remLabel);
       commit(); renderSheet();
     } else if (e.target.closest("[data-remove]")) {
+      if (state.phase > 0) logEvent("role-remove", { who: who(t) });
       removeToken(t.uid);
       sheet.close();
       commit();
@@ -457,13 +482,14 @@
 
   function renderPanel() {
     if (!currentPanel) return;
-    const titles = { roles: "Rôles en jeu", night: "Ordre de nuit", rules: "Règles rapides" };
+    const titles = { roles: "Rôles en jeu", night: "Ordre de nuit", rules: "Règles rapides", journal: "Journal de partie" };
     $("#panelTitle").textContent = titles[currentPanel];
     const body = $("#panelBody");
     const scroll = body.scrollTop;
     if (currentPanel === "roles") body.innerHTML = rolesPanel();
     if (currentPanel === "night") body.innerHTML = nightPanel();
     if (currentPanel === "rules") body.innerHTML = rulesPanel();
+    if (currentPanel === "journal") body.innerHTML = journalPanel();
     body.scrollTop = scroll;
   }
 
@@ -544,6 +570,20 @@
   const nightItemName = (i) => i.special
     ? escapeHtml(i.name)
     : `<span class="team-text-${i.role.team}">${escapeHtml(i.role.name)}</span>${i.token.player ? ` · ${escapeHtml(i.token.player)}` : ""}${i.token.dead ? ` <em>(mort)</em>` : ""}`;
+
+  // Cocher une étape la journalise ; la décocher retire l'entrée de cette nuit
+  function toggleNightCheck(k) {
+    if (state.nightChecks.includes(k)) {
+      state.nightChecks = state.nightChecks.filter((x) => x !== k);
+      const i = state.log.findLastIndex((e) => e.type === "wake" && e.key === k && e.phase === state.phase);
+      if (i >= 0) state.log.splice(i, 1);
+      return;
+    }
+    state.nightChecks = [...state.nightChecks, k];
+    if (!isNight()) return;
+    const step = nightItems(isFirstNight()).find((i) => i.key === k);
+    if (step && !step.special) logEvent("wake", { key: k, who: who(step.token) });
+  }
 
   // Étape en cours : la première non cochée de la nuit actuelle
   function currentNightStep() {
@@ -688,13 +728,189 @@
       openBluffShow();
     } else if (check) {
       const k = check.dataset.check;
-      state.nightChecks = state.nightChecks.includes(k) ? state.nightChecks.filter((x) => x !== k) : [...state.nightChecks, k];
+      toggleNightCheck(k);
       commit();
     } else if (e.target.closest("[data-rail-toggle]")) {
       state.railHidden = !state.railHidden;
       commit();
     } else if (e.target.closest("[data-next-phase]")) {
       setPhase(state.phase + 1);
+    }
+  });
+
+  // ───────── Journal et récapitulatif ─────────
+  const phaseName = (p) => (p % 2 === 0 ? "Nuit " : "Jour ") + (Math.floor(p / 2) + 1);
+  const remText = (e) => `« ${escapeHtml(e.label)} »${e.roleId ? ` (${escapeHtml(ROLES[e.roleId]?.name || "")})` : ""}`;
+
+  function describe(e) {
+    switch (e.type) {
+      case "death": return `<b class="ev-death">☠ ${escapeHtml(whoText(e.who))}</b> meurt.`;
+      case "revive": return `♥ ${escapeHtml(whoText(e.who))} revient à la vie.`;
+      case "ghost": return `${escapeHtml(whoText(e.who))} utilise son vote fantôme.`;
+      case "ghost-back": return `${escapeHtml(whoText(e.who))} récupère son vote fantôme.`;
+      case "rem-add": return `Rappel ${remText(e)} posé sur ${escapeHtml(whoText(e.on))}.`;
+      case "rem-move": return `Rappel ${remText(e)} déplacé de ${escapeHtml(whoText(e.from))} vers ${escapeHtml(whoText(e.on))}.`;
+      case "rem-remove": return `Rappel ${remText(e)} retiré de ${escapeHtml(whoText(e.on))}.`;
+      case "wake": return `Réveil : ${escapeHtml(whoText(e.who))}.`;
+      case "bluffs": return `Bluffs montrés au Démon : ${e.roles.map((id) => escapeHtml(ROLES[id]?.name || id)).join(", ")}.`;
+      case "role-add": return `Entrée en jeu : ${escapeHtml(ROLES[e.roleId]?.name || "")}.`;
+      case "role-remove": return `Sortie du jeu : ${escapeHtml(whoText(e.who))}.`;
+      case "nomination":
+        return `<b>${escapeHtml(whoText(e.by))}</b> nomine <b>${escapeHtml(whoText(e.target))}</b>`
+          + `${e.votes !== "" && e.votes != null ? ` : ${e.votes} vote${e.votes > 1 ? "s" : ""}` : ""}`
+          + `${e.executed ? ` → <b class="ev-death">exécuté</b>.` : "."}`;
+      case "note": return `✎ ${escapeHtml(e.text)}`;
+      case "end": return `<b>Fin de partie : victoire ${e.winner === "good" ? "du Bien" : "du Mal"}.</b>`;
+      default: return escapeHtml(e.type);
+    }
+  }
+  const plain = (html) => html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+  function groupedLog() {
+    const groups = new Map();
+    for (const e of state.log) {
+      if (!groups.has(e.phase)) groups.set(e.phase, []);
+      groups.get(e.phase).push(e);
+    }
+    return [...groups.entries()].sort((x, y) => x[0] - y[0]);
+  }
+
+  let journalForm = null; // brouillon de nomination
+  function journalPanel() {
+    const options = (sel) => `<option value="">—</option>` + state.tokens.map((t) =>
+      `<option value="${t.uid}" ${sel === t.uid ? "selected" : ""}>${escapeHtml(whoText(who(t)))}${t.dead ? " †" : ""}</option>`).join("");
+    const f = journalForm || { by: "", target: "", votes: "", executed: false };
+    const groups = groupedLog();
+    return `
+      <form class="journal-form" id="nomForm">
+        <p class="journal-label">Nomination · ${phaseName(state.phase)}</p>
+        <label class="jf-row"><span>Nominateur</span><select id="nomBy">${options(f.by)}</select></label>
+        <label class="jf-row"><span>Nominé</span><select id="nomTarget">${options(f.target)}</select></label>
+        <div class="jf-row">
+          <label class="jf-votes"><span>Votes</span><input type="number" id="nomVotes" min="0" max="30" inputmode="numeric" value="${escapeHtml(f.votes)}"></label>
+          <label class="jf-check"><input type="checkbox" id="nomExecuted" ${f.executed ? "checked" : ""}> Exécuté</label>
+        </div>
+        <button class="btn primary small" type="submit">Noter la nomination</button>
+      </form>
+      <form class="journal-form" id="noteForm">
+        <p class="journal-label">Note libre</p>
+        <textarea id="noteInput" rows="2" placeholder="Ex. : Léo prétend être le Cuisinier, il annonce 1."></textarea>
+        <button class="btn small" type="submit">Ajouter la note</button>
+      </form>
+
+      <div class="journal-log">
+        ${groups.length ? groups.map(([ph, events]) => `
+          <section>
+            <h3 class="journal-phase ${ph % 2 === 0 ? "night" : "day"}">${ph % 2 === 0 ? "☾" : "☀"} ${phaseName(ph)}</h3>
+            <ul>${events.map((e) => `
+              <li class="ev ev-${e.type}"><span>${describe(e)}</span>
+                <button class="ev-del" data-ev-del="${e.id}" aria-label="Supprimer cette entrée">✕</button></li>`).join("")}
+            </ul>
+          </section>`).join("") : `<p class="hint">Le journal se remplit tout seul : morts, rappels, réveils, bluffs… Ajoutez les nominations et vos notes ci-dessus.</p>`}
+      </div>
+
+      <div class="journal-end">
+        ${state.ended
+          ? `<button class="btn primary" data-recap>Voir le récapitulatif</button>
+             <button class="btn ghost small" data-unend>Reprendre la partie</button>`
+          : `<p class="journal-label">Fin de partie</p>
+             <div class="end-choice">
+               <button class="btn end-good" data-end="good">Victoire du Bien</button>
+               <button class="btn end-evil" data-end="evil">Victoire du Mal</button>
+             </div>`}
+      </div>`;
+  }
+
+  // Récapitulatif plein écran
+  const recap = $("#recap");
+  function recapData() {
+    const start = state.setup || state.tokens.map((t) => ({ roleId: t.roleId, player: t.player || "" }));
+    const lastPhase = state.ended?.phase ?? state.phase;
+    return { start, lastPhase, groups: groupedLog() };
+  }
+  function openRecap() {
+    const { start, lastPhase, groups } = recapData();
+    const good = state.ended?.winner === "good";
+    const nights = Math.floor(lastPhase / 2) + 1, days = Math.floor((lastPhase + 1) / 2);
+    const finalOf = (s) => state.tokens.find((t) => t.roleId === s.roleId);
+    const executions = state.log.filter((e) => e.type === "nomination" && e.executed).length;
+    const deaths = state.log.filter((e) => e.type === "death").length + executions;
+    const teams = ["townsfolk", "outsider", "minion", "demon", "traveller"];
+    $("#recapBody").innerHTML = `
+      <button class="icon-btn recap-close" data-recap-close aria-label="Fermer">✕</button>
+      <header class="recap-head ${good ? "good" : "evil"}">
+        <p class="recap-eyebrow">Fin de partie · ${start.length} joueurs</p>
+        <h2>${state.ended ? (good ? "Victoire du Bien" : "Victoire du Mal") : "Partie en cours"}</h2>
+        <p class="recap-stats">${nights} nuit${nights > 1 ? "s" : ""} · ${days} jour${days > 1 ? "s" : ""} · ${deaths} mort${deaths > 1 ? "s" : ""} · ${executions} exécution${executions > 1 ? "s" : ""}</p>
+      </header>
+
+      <section class="recap-section">
+        <h3>Le Grimoire</h3>
+        <ul class="recap-cast">
+          ${teams.flatMap((team) => start.filter((s) => ROLES[s.roleId]?.team === team).map((s) => {
+            const r = ROLES[s.roleId], fin = finalOf(s);
+            return `<li class="${fin?.dead ? "dead" : ""}">
+              <span class="mini team-${r.team}">${monogram(r.name)}</span>
+              <span class="cast-text"><b>${escapeHtml(fin?.player || s.player || "—")}</b>
+                <span class="team-text-${r.team}">${escapeHtml(r.name)}</span></span>
+              <span class="cast-state">${!fin ? "parti" : fin.dead ? "☠ mort" : "vivant"}</span>
+            </li>`;
+          })).join("")}
+        </ul>
+        ${state.bluffs.length ? `<p class="hint">Bluffs du Démon : ${state.bluffs.map((id) => escapeHtml(ROLES[id].name)).join(", ")}</p>` : ""}
+      </section>
+
+      <section class="recap-section">
+        <h3>Chronologie</h3>
+        ${groups.length ? `<ol class="recap-timeline">${groups.map(([ph, events]) => `
+          <li class="${ph % 2 === 0 ? "night" : "day"}">
+            <p class="tl-phase">${ph % 2 === 0 ? "☾" : "☀"} ${phaseName(ph)}</p>
+            <ul>${events.filter((e) => e.type !== "wake").map((e) => `<li>${describe(e)}</li>`).join("")}
+              ${events.some((e) => e.type === "wake") ? `<li class="tl-wakes">Réveils : ${events.filter((e) => e.type === "wake").map((e) => escapeHtml(whoText(e.who))).join(" → ")}</li>` : ""}
+            </ul>
+          </li>`).join("")}</ol>` : `<p class="hint">Aucun événement noté.</p>`}
+      </section>
+
+      <div class="recap-actions">
+        <button class="btn" data-recap-copy>Copier le récit</button>
+        <button class="btn primary" data-recap-close>Fermer</button>
+      </div>
+      <textarea class="recap-text" id="recapText" readonly hidden></textarea>`;
+    if (!recap.open) recap.showModal();
+    recap.querySelector(".recap-inner").scrollTop = 0;
+  }
+  function recapPlainText() {
+    const { start, groups } = recapData();
+    const lines = [];
+    lines.push(state.ended ? (state.ended.winner === "good" ? "VICTOIRE DU BIEN" : "VICTOIRE DU MAL") : "PARTIE EN COURS", "");
+    lines.push("Grimoire :");
+    for (const s of start) {
+      const fin = state.tokens.find((t) => t.roleId === s.roleId);
+      lines.push(`- ${fin?.player || s.player || "—"} : ${ROLES[s.roleId].name} (${TEAMS[ROLES[s.roleId].team].label})${fin?.dead ? " — mort" : ""}`);
+    }
+    if (state.bluffs.length) lines.push(`Bluffs : ${state.bluffs.map((id) => ROLES[id].name).join(", ")}`);
+    for (const [ph, events] of groups) {
+      lines.push("", phaseName(ph).toUpperCase());
+      const wakes = events.filter((e) => e.type === "wake");
+      for (const e of events.filter((e) => e.type !== "wake")) lines.push("- " + plain(describe(e)));
+      if (wakes.length) lines.push("- Réveils : " + wakes.map((e) => whoText(e.who)).join(" → "));
+    }
+    return lines.join("\n");
+  }
+  recap.addEventListener("click", (e) => {
+    if (e.target.closest("[data-recap-close]")) { recap.close(); return; }
+    const copy = e.target.closest("[data-recap-copy]");
+    if (copy) {
+      const text = recapPlainText();
+      const done = () => { copy.textContent = "Récit copié"; setTimeout(() => (copy.textContent = "Copier le récit"), 2000); };
+      const fallback = () => {
+        const ta = $("#recapText");
+        ta.hidden = false;
+        ta.value = text;
+        ta.select();
+        copy.textContent = "Sélectionnez puis copiez le texte ci-dessous";
+      };
+      try { navigator.clipboard.writeText(text).then(done, fallback); } catch (err) { fallback(); }
     }
   });
 
@@ -715,7 +931,13 @@
     if (roleBtn) {
       const id = roleBtn.dataset.role;
       const tok = state.tokens.find((t) => t.roleId === id);
-      if (tok) removeToken(tok.uid); else addRole(id);
+      if (tok) {
+        if (state.phase > 0) logEvent("role-remove", { who: who(tok) });
+        removeToken(tok.uid);
+      } else {
+        addRole(id);
+        if (state.phase > 0) logEvent("role-add", { roleId: id });
+      }
       commit();
     } else if (players) {
       state.players = Math.min(20, Math.max(5, state.players + Number(players.dataset.players)));
@@ -728,12 +950,50 @@
       renderPanel();
     } else if (check) {
       const k = check.dataset.check;
-      state.nightChecks = state.nightChecks.includes(k) ? state.nightChecks.filter((x) => x !== k) : [...state.nightChecks, k];
+      toggleNightCheck(k);
+      commit();
+    } else if (e.target.closest("[data-ev-del]")) {
+      const id = e.target.closest("[data-ev-del]").dataset.evDel;
+      state.log = state.log.filter((x) => x.id !== id);
+      commit();
+    } else if (e.target.closest("[data-end]")) {
+      if (!state.setup) state.setup = state.tokens.map((t) => ({ roleId: t.roleId, player: t.player || "" }));
+      state.ended = { winner: e.target.closest("[data-end]").dataset.end, phase: state.phase };
+      logEvent("end", { winner: state.ended.winner });
+      commit();
+      openRecap();
+    } else if (e.target.closest("[data-recap]")) {
+      openRecap();
+    } else if (e.target.closest("[data-unend]")) {
+      state.ended = null;
+      state.log = state.log.filter((x) => x.type !== "end");
       commit();
     } else if (e.target.closest("[data-clear-checks]")) {
       state.nightChecks = [];
       commit();
     }
+  });
+  panel.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (e.target.id === "nomForm") {
+      const by = tokenByUid($("#nomBy").value), target = tokenByUid($("#nomTarget").value);
+      if (!by || !target) return;
+      const votes = $("#nomVotes").value === "" ? "" : Number($("#nomVotes").value);
+      const executed = $("#nomExecuted").checked;
+      logEvent("nomination", { by: who(by), target: who(target), votes, executed });
+      if (executed && !target.dead) target.dead = true;
+      journalForm = null;
+      commit();
+    } else if (e.target.id === "noteForm") {
+      const text = $("#noteInput").value.trim();
+      if (!text) return;
+      logEvent("note", { text });
+      commit();
+    }
+  });
+  panel.addEventListener("change", (e) => {
+    if (!e.target.closest("#nomForm")) return;
+    journalForm = { by: $("#nomBy").value, target: $("#nomTarget").value, votes: $("#nomVotes").value, executed: $("#nomExecuted").checked };
   });
   panel.addEventListener("input", (e) => {
     if (e.target.id !== "roleSearch") return;
@@ -751,6 +1011,10 @@
     return p % 2 === 0 ? `☾ Nuit ${n}` : `☀ Jour ${n}`;
   }
   function setPhase(p) {
+    if (state.phase === 0 && p > 0 && !state.setup) {
+      state.setup = state.tokens.map((t) => ({ roleId: t.roleId, player: t.player || "" }));
+      if (state.bluffs.length) logEvent("bluffs", { roles: [...state.bluffs] });
+    }
     state.phase = Math.max(0, p);
     if (isNight()) state.nightChecks = [];
     nightTab = null;
@@ -792,6 +1056,7 @@
     btn.classList.remove("confirming");
     const { players, tokenSize, filter } = state;
     state = { ...defaultState(), players, tokenSize, filter };
+    journalForm = null;
     sheet.open && sheet.close();
     document.body.classList.remove("is-day");
     commit();

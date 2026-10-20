@@ -25,6 +25,7 @@
     <nav class="actions">
       <button class="btn" data-panel="roles">Rôles <span class="pill" id="roleCount">0</span></button>
       <button class="btn" data-panel="night">Ordre de nuit</button>
+      <button class="btn" data-panel="journal">Journal</button>
       <button class="btn" data-panel="rules">Règles</button>
       <span class="sep" aria-hidden="true"></span>
       <button class="btn ghost" id="arrangeBtn" title="Disposer les jetons en cercle">Cercle</button>
@@ -62,6 +63,10 @@
 
   <dialog class="bluff-show" id="bluffShow" aria-label="Bluffs du Démon">
     <div class="bluff-show-inner" id="bluffShowBody"></div>
+  </dialog>
+
+  <dialog class="recap" id="recap" aria-label="Récapitulatif de partie">
+    <div class="recap-inner" id="recapBody"></div>
   </dialog>
 
   <script src="js/roles.js"></script>
