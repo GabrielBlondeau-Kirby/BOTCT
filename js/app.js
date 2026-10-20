@@ -154,6 +154,7 @@
   let drag = null;
   board.addEventListener("pointerdown", (e) => {
     const el = e.target.closest(".token, .reminder");
+    justDragged = false;
     if (!el || e.target.closest(".rem-del")) return;
     const list = el.classList.contains("token") ? state.tokens : state.reminders;
     const item = list.find((i) => i.uid === el.dataset.uid);
@@ -178,22 +179,31 @@
     const { el, item, moved } = drag;
     el.classList.remove("dragging");
     drag = null;
-    if (moved) { save(); return; }
-    if (el.classList.contains("token")) openSheet(item.uid);
-    else {
-      board.querySelectorAll(".reminder.selected").forEach((r) => r !== el && r.classList.remove("selected"));
-      el.classList.toggle("selected");
-    }
+    justDragged = moved;
+    if (moved) save();
   };
+  // L'ouverture se fait au « click » : au doigt, un clic suit le relâchement
+  // et refermerait aussitôt une fiche ouverte dès le pointerup.
+  let justDragged = false;
   board.addEventListener("pointerup", endDrag);
   board.addEventListener("pointercancel", endDrag);
   board.addEventListener("click", (e) => {
     const del = e.target.closest(".rem-del");
+    const piece = e.target.closest(".token, .reminder");
+    if (piece && !del) {
+      if (justDragged) { justDragged = false; return; }
+      if (piece.classList.contains("token")) openSheet(piece.dataset.uid);
+      else {
+        board.querySelectorAll(".reminder.selected").forEach((r) => r !== piece && r.classList.remove("selected"));
+        piece.classList.toggle("selected");
+      }
+      return;
+    }
     if (del) {
       const uidToRemove = del.parentElement.dataset.uid;
       state.reminders = state.reminders.filter((r) => r.uid !== uidToRemove);
       commit();
-    } else if (!e.target.closest(".reminder")) {
+    } else {
       board.querySelectorAll(".reminder.selected").forEach((r) => r.classList.remove("selected"));
     }
   });
@@ -504,8 +514,24 @@
     board.style.setProperty("--token", state.tokenSize + "px");
     save();
   });
-  $("#resetBtn").addEventListener("click", () => {
-    if (!confirm("Commencer une nouvelle partie ? Le Grimoire actuel sera effacé.")) return;
+  // Confirmation dans la page (les fenêtres confirm() ne sont pas toujours disponibles)
+  let resetTimer = null;
+  $("#resetBtn").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    if (!resetTimer) {
+      btn.textContent = "Effacer le Grimoire ?";
+      btn.classList.add("confirming");
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
+        btn.textContent = "Nouvelle partie";
+        btn.classList.remove("confirming");
+      }, 3000);
+      return;
+    }
+    clearTimeout(resetTimer);
+    resetTimer = null;
+    btn.textContent = "Nouvelle partie";
+    btn.classList.remove("confirming");
     const { players, tokenSize, filter } = state;
     state = { ...defaultState(), players, tokenSize, filter };
     sheet.open && sheet.close();

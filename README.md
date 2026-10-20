@@ -4,8 +4,8 @@ Une app web simple pour gérer une partie de *Blood on the Clocktower* quand on 
 
 ## Lancer l'app
 
-Pas d'installation : ouvrez `index.html` dans un navigateur (sur tablette ou ordinateur).
-Pour y accéder depuis une tablette, vous pouvez aussi l'activer dans GitHub Pages (Settings → Pages → branche, dossier racine).
+- **Sur iPad** : ouvrez la version hébergée https://claude.ai/artifact/4i2fm8cbiPCwUC3ktAqb5v dans Safari, puis Partager → « Sur l'écran d'accueil ».
+- **Sur ordinateur** : pas d'installation, ouvrez `index.html` dans un navigateur.
 
 ## Fonctionnalités
 
