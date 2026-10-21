@@ -711,6 +711,7 @@
             ${isCurrent ? `
               <p class="rail-text">${escapeHtml(i.text)}</p>
               ${i.key === "_demoninfo" ? bluffPicker() : ""}
+              ${i.key === "_dawn" ? dawnBox() : ""}
               ${i.token ? actionBox(i) : ""}
               <button class="btn primary rail-done" data-check="${i.key}">Fait, étape suivante</button>` : ""}
           </li>`;
@@ -789,6 +790,62 @@
   // Pose le rappel sur ce joueur (le déplace s'il est déjà posé ailleurs)
   function placeReminder(t, roleId, label) {
     if (!state.reminders.some((r) => r.tokenUid === t.uid && sameReminder(r, roleId, label))) toggleReminder(t, roleId, label);
+  }
+
+  function revive(t) {
+    if (!t.dead) return;
+    t.dead = false;
+    t.ghostUsed = false;
+    logEvent("revive", { who: who(t) });
+  }
+  const hasReminder = (t, roleId, label) => state.reminders.some((r) => r.tokenUid === t.uid && sameReminder(r, roleId, label));
+  const holder = (roleId, label) => tokenByUid(state.reminders.find((r) => sameReminder(r, roleId, label))?.tokenUid);
+  function removeReminders(roleId, label) {
+    state.reminders = state.reminders.filter((r) => !sameReminder(r, roleId, label));
+  }
+  const alive = () => state.tokens.filter((t) => !t.dead);
+  // Joueurs morts pendant une phase (d'après le journal), sans ceux revenus à la vie depuis
+  function diedOn(phase) {
+    const dead = new Map();
+    for (const e of state.log) {
+      if (e.phase !== phase) continue;
+      const w = e.type === "nomination" ? (e.executed ? e.target : null) : e.who;
+      if (!w) continue;
+      const k = w.player + "|" + w.roleId;
+      if (e.type === "death" || e.type === "nomination") dead.set(k, w);
+      if (e.type === "revive") dead.delete(k);
+    }
+    return [...dead.values()];
+  }
+  // Ordre des places : angle de chaque jeton autour du centre du plateau
+  const seats = () => [...state.tokens].sort((a, b) => Math.atan2(a.y - 51, a.x - 50) - Math.atan2(b.y - 51, b.x - 50));
+  function aliveNeighbours(t) {
+    const ring = seats().filter((x) => !x.dead || x === t);
+    const i = ring.indexOf(t), n = ring.length;
+    return n < 3 ? ring.filter((x) => x !== t) : [ring[(i - 1 + n) % n], ring[(i + 1) % n]];
+  }
+  // Ce qui peut empêcher une mort (by : "demon", "other" ou "assassin", qui ignore tout)
+  function protections(t, by) {
+    if (by === "assassin") return [];
+    const w = [];
+    if (by === "demon" && hasReminder(t, "monk", "Protégé")) w.push("protégé par le Moine");
+    if (hasReminder(t, "innkeeper", "Protégé")) w.push("protégé par l'Aubergiste");
+    if (by === "demon" && t.roleId === "soldier") w.push("Soldat, protégé du Démon");
+    if (t.roleId === "sailor") w.push("Marin, ne peut pas mourir s'il est sobre");
+    if (t.roleId === "fool" && !hasReminder(t, "fool", "Sans pouvoir")) w.push("Bouffon, sa 1re mort est évitée");
+    if (by === "demon" && t.roleId === "mayor") w.push("Maire, un autre joueur peut mourir à sa place");
+    const tea = state.tokens.find((x) => x.roleId === "tealady" && !x.dead);
+    if (tea && tea !== t && aliveNeighbours(tea).includes(t) && aliveNeighbours(tea).every((x) => alignOf(x) === "good")) w.push("voisin de la Dame du thé");
+    return w;
+  }
+  function killPlan(t, by, extra = {}) {
+    const w = protections(t, by);
+    return {
+      note: `${tokName(t)} meurt.${w.length ? ` Attention : ${w.join(", ")}.` : ""}${extra.note || ""}`,
+      warn: w.length > 0,
+      button: w.length ? "Tuer quand même" : `Tuer ${tokName(t)}`,
+      run() { kill(t); extra.after?.(); },
+    };
   }
 
   // Pages de l'écran plein écran : « Vous êtes… » après un changement de personnage
@@ -940,17 +997,6 @@
         show: [{ title: "Ces personnages ne sont pas en jeu", roles: state.lunaticBluffs.filter(Boolean) }],
       },
     },
-    godfather: {
-      when: () => isFirstNight(),
-      plan: () => {
-        const ids = outsidersInPlay();
-        return {
-          note: ids.length ? `${ids.length} Étranger${ids.length > 1 ? "s" : ""} en jeu.` : "Aucun Étranger en jeu.",
-          button: "Montrer au Parrain", stay: true,
-          show: [{ title: "Les Étrangers en jeu", roles: ids, empty: "Aucun Étranger n'est en jeu" }],
-        };
-      },
-    },
     scarletwoman: {
       when: (me) => !me.dead && state.tokens.some((t) => t.dead && teamOf(t) === "demon"),
       plan(me) {
@@ -1010,25 +1056,161 @@
       },
     },
     imp: {
-      prompt: "S'il se désigne : le Sbire qui devient Diablotin",
-      pool: () => state.tokens.filter((t) => !t.dead && teamOf(t) === "minion"),
-      plan: (me, [t]) => t && {
-        note: `${tokName(me)} meurt, ${tokName(t)} devient le Diablotin.`,
-        button: "Passer le flambeau",
-        run() { kill(me); changeRole(t, "imp"); },
-        show: [youAre(t, "imp")],
+      prompt: "Victime (lui-même pour passer le flambeau)",
+      pool: alive,
+      sub: (me, [t]) => t === me && { prompt: "Le Sbire qui devient Diablotin", pool: alive().filter((x) => teamOf(x) === "minion") },
+      plan(me, [t], role, rid, heir) {
+        if (t !== me) return t && killPlan(t, "demon");
+        if (!heir) return { note: alive().some((x) => teamOf(x) === "minion") ? "Choisissez le Sbire qui devient Diablotin." : "Aucun Sbire vivant : le Diablotin meurt et le Bien gagne." };
+        return {
+          note: `${tokName(me)} meurt, ${tokName(heir)} devient le Diablotin.`,
+          button: "Passer le flambeau",
+          run() { kill(me); changeRole(heir, "imp"); },
+          show: [youAre(heir, "imp")],
+        };
       },
     },
     fanggu: {
-      prompt: "Si la victime est le 1er Étranger visé",
-      when: () => !state.reminders.some((r) => sameReminder(r, "fanggu", "Une fois")),
-      pool: () => state.tokens.filter((t) => !t.dead && teamOf(t) === "outsider"),
-      plan: (me, [t]) => t && {
-        note: `${tokName(t)} devient le Fang Gu (Mauvais), ${tokName(me)} meurt à sa place.`,
-        button: "Sauter sur l'Étranger",
-        run() { kill(me); changeRole(t, "fanggu", "evil"); placeReminder(t, "fanggu", "Une fois"); },
-        show: [youAre(t, "fanggu", "evil")],
+      prompt: "Victime",
+      pool: alive,
+      plan(me, [t]) {
+        if (!t) return null;
+        const jump = teamOf(t) === "outsider" && !state.reminders.some((r) => sameReminder(r, "fanggu", "Une fois"));
+        if (!jump) return killPlan(t, "demon");
+        return {
+          note: `1er Étranger visé : ${tokName(t)} devient le Fang Gu (Mauvais), ${tokName(me)} meurt à sa place.`,
+          button: "Sauter sur l'Étranger",
+          run() { kill(me); changeRole(t, "fanggu", "evil"); placeReminder(t, "fanggu", "Une fois"); },
+          show: [youAre(t, "fanggu", "evil")],
+        };
       },
+    },
+    nodashii: { prompt: "Victime", pool: alive, plan: (me, [t]) => t && killPlan(t, "demon") },
+    vortox: { prompt: "Victime", pool: alive, plan: (me, [t]) => t && killPlan(t, "demon") },
+    vigormortis: {
+      prompt: "Victime",
+      pool: alive,
+      plan: (me, [t]) => t && killPlan(t, "demon", teamOf(t) === "minion" ? {
+        note: " Sbire : il garde sa capacité ; empoisonnez un de ses voisins Villageois.",
+        after() { placeReminder(t, "vigormortis", "Garde sa capacité"); },
+      } : {}),
+    },
+    zombuul: {
+      prompt: "Victime",
+      pool: alive,
+      plan(me, [t]) {
+        if (diedOn(state.phase - 1).length) return { note: "Quelqu'un est mort aujourd'hui : le Zombuul ne se réveille pas." };
+        return t && killPlan(t, "demon");
+      },
+    },
+    pukka: {
+      prompt: "Joueur empoisonné",
+      pool: alive,
+      plan(me, [t]) {
+        if (!t) return null;
+        const prev = holder("pukka", "Empoisonné");
+        const dies = prev && prev !== t && !prev.dead ? prev : null;
+        const w = dies ? protections(dies, "demon") : [];
+        return {
+          note: `${tokName(t)} est empoisonné.${dies ? ` ${tokName(dies)}, empoisonné la nuit dernière, meurt${w.length ? ` (attention : ${w.join(", ")})` : ""}.` : ""}`,
+          warn: w.length > 0,
+          button: dies ? "Empoisonner et tuer" : "Poser « Empoisonné »",
+          run() { if (dies) kill(dies); placeReminder(t, "pukka", "Empoisonné"); },
+        };
+      },
+    },
+    shabaloth: {
+      prompt: "2 victimes",
+      count: 2,
+      pool: alive,
+      sub: () => ({ prompt: "Recrache un mort de la nuit dernière (facultatif)", pool: state.tokens.filter((x) => x.dead) }),
+      plan(me, picks, role, rid, back) {
+        if (!picks.length && !back) return null;
+        const w = picks.flatMap((t) => protections(t, "demon").map((x) => `${tokName(t)} : ${x}`));
+        return {
+          note: [picks.length ? `${picks.map(tokName).join(" et ")} ${picks.length > 1 ? "meurent" : "meurt"}.` : "", back ? `${tokName(back)} revient à la vie.` : "", w.length ? `Attention : ${w.join(" ; ")}.` : ""].filter(Boolean).join(" "),
+          warn: w.length > 0,
+          button: "Appliquer",
+          run() { picks.forEach(kill); if (back) revive(back); },
+        };
+      },
+    },
+    po: {
+      prompt: "Victime(s)",
+      count: (me) => (hasReminder(me, "po", "3 attaques") ? 3 : 1),
+      pool: alive,
+      plan(me, picks) {
+        if (!picks.length) return {
+          note: "S'il ne choisit personne, il attaquera 3 fois la nuit prochaine.",
+          button: "Ne choisit personne",
+          run() { placeReminder(me, "po", "3 attaques"); },
+        };
+        const w = picks.flatMap((t) => protections(t, "demon").map((x) => `${tokName(t)} : ${x}`));
+        return {
+          note: `${picks.map(tokName).join(", ")} ${picks.length > 1 ? "meurent" : "meurt"}.${w.length ? ` Attention : ${w.join(" ; ")}.` : ""}`,
+          warn: w.length > 0,
+          button: w.length ? "Tuer quand même" : "Tuer",
+          run() { picks.forEach(kill); removeReminders("po", "3 attaques"); },
+        };
+      },
+    },
+    godfather: {
+      prompt: "Victime",
+      pool: alive,
+      plan(me, [t]) {
+        if (isFirstNight()) {
+          const ids = outsidersInPlay();
+          return {
+            note: ids.length ? `${ids.length} Étranger${ids.length > 1 ? "s" : ""} en jeu.` : "Aucun Étranger en jeu.",
+            button: "Montrer au Parrain", stay: true,
+            show: [{ title: "Les Étrangers en jeu", roles: ids, empty: "Aucun Étranger n'est en jeu" }],
+          };
+        }
+        if (!diedOn(state.phase - 1).some((w) => ROLES[w.roleId]?.team === "outsider")) return { note: "Aucun Étranger n'est mort aujourd'hui : le Parrain ne se réveille pas." };
+        return t && killPlan(t, "other");
+      },
+    },
+    assassin: {
+      prompt: "Victime (une fois par partie)",
+      when: (me) => !hasReminder(me, "assassin", "Sans pouvoir"),
+      pool: alive,
+      plan: (me, [t]) => t && killPlan(t, "assassin", { after() { placeReminder(me, "assassin", "Sans pouvoir"); } }),
+    },
+    gossip: {
+      prompt: "Si sa déclaration était vraie : victime",
+      pool: alive,
+      plan: (me, [t]) => t && killPlan(t, "other"),
+    },
+    moonchild: {
+      prompt: "Joueur choisi par l'Enfant de la lune",
+      pool: alive,
+      plan: (me, [t]) => t && (alignOf(t) === "good" ? killPlan(t, "other") : { note: `${tokName(t)} est Mauvais : il ne meurt pas.` }),
+    },
+    tinker: {
+      when: (me) => !me.dead,
+      plan: (me) => ({ note: "Le Bricoleur peut mourir à tout moment.", button: "Le Bricoleur meurt", run() { kill(me); } }),
+    },
+    gambler: {
+      prompt: "Joueur désigné",
+      pool: (me) => others(me),
+      rolePrompt: "Personnage annoncé",
+      roles: () => scriptRoles(["townsfolk", "outsider", "minion", "demon"]),
+      plan: (me, [t], role) => t && role && (role.id === t.roleId
+        ? { note: "Bonne réponse : rien ne se passe." }
+        : killPlan(me, "other", { note: ` Mauvaise réponse (${tokName(t)} est ${ROLES[t.roleId].name}).` })),
+    },
+    professor: {
+      prompt: "Joueur mort ressuscité (une fois par partie)",
+      when: (me) => !hasReminder(me, "professor", "Sans pouvoir"),
+      pool: () => state.tokens.filter((x) => x.dead),
+      plan: (me, [t]) => t && (teamOf(t) === "townsfolk"
+        ? { note: `${tokName(t)} revient à la vie.`, button: "Ressusciter", run() { revive(t); placeReminder(t, "professor", "Ressuscité"); placeReminder(me, "professor", "Sans pouvoir"); } }
+        : { note: `${tokName(t)} n'est pas un Villageois : la capacité est utilisée sans effet.`, button: "Utiliser sans effet", run() { placeReminder(me, "professor", "Sans pouvoir"); } }),
+    },
+    sweetheart: {
+      prompt: "Joueur ivre définitivement",
+      pool: alive,
+      plan: (me, [t]) => t && { note: `${tokName(t)} est ivre jusqu'à la fin de la partie.`, button: "Poser « Ivre »", run() { placeReminder(t, "sweetheart", "Ivre"); } },
     },
     philosopher: {
       rolePrompt: "Personnage Bon choisi",
@@ -1060,20 +1242,23 @@
     const roles = a.roles ? a.roles(me, picks) : [];
     const roleId = act.role || (a.roleDefault ? a.roleDefault(me, picks) : "");
     const role = roles.some((r) => r.id === roleId) ? ROLES[roleId] : null;
-    let plan = a.plan(me, picks, role, step.role.id) || null;
+    const sub = (a.sub && a.sub(me, picks)) || null;
+    const subPick = sub && sub.pool.find((t) => t.uid === act.sub) || null;
+    let plan = a.plan(me, picks, role, step.role.id, subPick) || null;
     // l'Ivrogne agit comme le Villageois qu'il croit être : seuls les écrans et rappels restent
     if (plan && me.roleId !== step.role.id && !plan.stay) plan = { note: `${tokName(me)} est l'${ROLES[me.roleId].name} : l'effet ne s'applique pas.` };
-    return { a, me, pool, picks, roles, role, plan };
+    return { a, me, pool, picks, roles, role, sub, subPick, plan };
   }
+  const countOf = (a, me) => (typeof a.count === "function" ? a.count(me) : a.count || 1);
 
   function actionBox(step) {
     const p = actionPlan(step);
     if (!p) return "";
-    const { a, me, pool, picks, roles, role, plan } = p;
-    const pickBtn = (t) => {
-      const n = picks.indexOf(t);
+    const { a, me, pool, picks, roles, role, sub, subPick, plan } = p;
+    const pickBtn = (t, attr = "data-act-pick", chosen = picks) => {
+      const n = chosen.indexOf(t);
       return `
-      <button class="act-pick team-${teamOf(t)} ${n >= 0 ? "on" : ""} ${t.dead ? "dead" : ""}" data-act-pick="${t.uid}" aria-pressed="${n >= 0}">
+      <button class="act-pick team-${teamOf(t)} ${n >= 0 ? "on" : ""} ${t.dead ? "dead" : ""}" ${attr}="${t.uid}" aria-pressed="${n >= 0}">
         <span class="mini team-${teamOf(t)}">${monogram(ROLES[t.roleId].name)}</span>
         <span>${escapeHtml(tokName(t))}${t.player ? `<small>${escapeHtml(ROLES[t.roleId].name)}</small>` : ""}</span>
         ${n >= 0 && a.labels ? `<b class="act-tag">${a.labels[n]}</b>` : ""}
@@ -1090,13 +1275,27 @@
         ${a.box ? a.box(me) : ""}
         ${a.pool ? `
           <p class="act-label">${escapeHtml(a.prompt)}</p>
-          <div class="act-picks">${pool.map(pickBtn).join("") || `<span class="hint">Aucun joueur possible.</span>`}</div>` : ""}
+          <div class="act-picks">${pool.map((t) => pickBtn(t)).join("") || `<span class="hint">Aucun joueur possible.</span>`}</div>` : ""}
+        ${sub ? `
+          <p class="act-label">${escapeHtml(sub.prompt)}</p>
+          <div class="act-picks">${sub.pool.map((t) => pickBtn(t, "data-act-sub", subPick ? [subPick] : [])).join("") || `<span class="hint">Aucun joueur possible.</span>`}</div>` : ""}
         ${a.roles && roles.length ? `
           <label class="act-label">${escapeHtml(a.rolePrompt)}
             <select class="act-role" data-act-role><option value="">Choisir…</option>${groups}</select>
           </label>` : ""}
-        ${plan?.note ? `<p class="act-note">${escapeHtml(plan.note)}</p>` : ""}
-        ${plan?.button && (plan.run || plan.show) ? `<button class="btn act-run" data-act-run>${escapeHtml(plan.button)}</button>` : ""}
+        ${plan?.note ? `<p class="act-note ${plan.warn ? "warn" : ""}">${escapeHtml(plan.note)}</p>` : ""}
+        ${plan?.button && (plan.run || plan.show) ? `<button class="btn act-run ${plan.warn ? "warn" : ""}" data-act-run>${escapeHtml(plan.button)}</button>` : ""}
+      </div>`;
+  }
+
+  // Aube : les morts de la nuit à annoncer
+  function dawnBox() {
+    const dead = diedOn(state.phase);
+    return `
+      <div class="act">
+        <p class="act-label">Morts à annoncer</p>
+        ${dead.length ? `<ul class="dawn-list">${dead.map((w) => `<li>☠ <b>${escapeHtml(w.player || ROLES[w.roleId]?.name || "?")}</b>${w.player ? ` <small>${escapeHtml(ROLES[w.roleId]?.name || "")}</small>` : ""}</li>`).join("")}</ul>`
+          : `<p class="act-note">Personne n'est mort cette nuit.</p>`}
       </div>`;
   }
 
@@ -1171,12 +1370,18 @@
       openBluffShow();
     } else if (e.target.closest("[data-act-pick]")) {
       const u = e.target.closest("[data-act-pick]").dataset.actPick;
-      const a = NIGHT_ACTIONS[currentNightStep()?.role?.id];
-      const n = a?.count || 1;
+      const step = currentNightStep();
+      const a = NIGHT_ACTIONS[step?.role?.id];
+      const n = a ? countOf(a, step.token) : 1;
+      act.sub = null;
       if (a?.roleDefault) act.role = ""; // le jeton montré suit le joueur désigné
       if (act.picks.includes(u)) act.picks = act.picks.filter((x) => x !== u);
       else if (act.picks.length < n) act.picks = [...act.picks, u];
       else act.picks = [...act.picks.slice(0, n - 1), u];
+      renderRail();
+    } else if (e.target.closest("[data-act-sub]")) {
+      const u = e.target.closest("[data-act-sub]").dataset.actSub;
+      act.sub = act.sub === u ? null : u;
       renderRail();
     } else if (e.target.closest("[data-act-run]")) {
       runAction();
