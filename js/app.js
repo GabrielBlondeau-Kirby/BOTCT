@@ -833,7 +833,8 @@
     roles: () => scriptRoles(["townsfolk", "outsider", "minion", "demon"]),
     roleDefault: (me, [t]) => t?.roleId || "",
     plan: (me, [t], role, rid) => t && role && {
-      note: `Montrez ${role.name}${role.id !== t.roleId ? ` (au lieu de ${ROLES[t.roleId].name})` : ""}.`,
+      note: `Montrez ${role.name}${role.id !== t.roleId ? ` (au lieu de ${ROLES[t.roleId].name})` : ""}.`
+        + (rid === "grandmother" && alignOf(t) === "evil" ? ` ${tokName(t)} est Mauvais : seulement si la Grand-mère est ivre ou empoisonnée (ou si c'est l'Espion).` : ""),
       button: "Montrer", stay: true,
       run: extra.run && (() => extra.run(t, rid)),
       show: [{ title, roles: [role.id] }],
@@ -858,7 +859,8 @@
     }),
     ravenkeeper: revealOf("Joueur désigné", "Ce joueur est"),
     harlot: revealOf("Joueur désigné (s'il accepte)", "Ce joueur est"),
-    grandmother: revealOf("Petit-enfant", "Votre petit-enfant est", (me) => others(me).filter((t) => alignOf(t) === "good"), {
+    // tous les joueurs sont proposés : une Grand-mère ivre ou empoisonnée peut recevoir un joueur Mauvais
+    grandmother: revealOf("Petit-enfant", "Votre petit-enfant est", others, {
       run: (t, rid) => placeReminder(t, rid, "Petit-enfant"),
     }),
     dreamer: {
