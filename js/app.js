@@ -600,7 +600,12 @@
       </div>`;
   }
 
-  // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu
+  // Un joueur mort perd sa capacité, sauf celles qui se déclenchent à la mort
+  // (et le Zombuul, qui paraît mort mais vit encore)
+  const WORKS_DEAD = new Set(["ravenkeeper", "sage", "moonchild", "sweetheart", "barber", "zombuul"]);
+  const keepsAbility = (t, id) => !t.dead || WORKS_DEAD.has(id) || hasReminder(t, "vigormortis", "Garde sa capacité");
+
+  // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu et aux capacités actives
   function nightItems(first) {
     const order = first ? FIRST_NIGHT : OTHER_NIGHT;
     const bigGame = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length >= 7;
@@ -614,7 +619,7 @@
       const role = ROLES[id];
       const text = first ? role.firstNight : role.otherNight;
       // l'Ivrogne se réveille comme le Villageois qu'il croit être
-      for (const t of state.tokens.filter((x) => x.roleId === id || (x.roleId === "drunk" && x.believes === id))) {
+      for (const t of state.tokens.filter((x) => (x.roleId === id || (x.roleId === "drunk" && x.believes === id)) && keepsAbility(x, id))) {
         items.push({ key: t.uid + ":" + id, role, token: t, text });
       }
     }
@@ -838,6 +843,18 @@
     if (tea && tea !== t && aliveNeighbours(tea).includes(t) && aliveNeighbours(tea).every((x) => alignOf(x) === "good")) w.push("voisin de la Dame du thé");
     return w;
   }
+  // Information calculée : la vraie réponse, et ce qui permet ou oblige à la fausser
+  function infoPlan(me, answer, label, involved) {
+    const w = [];
+    const rid = currentNightStep()?.role.id;
+    if (rid && me.roleId !== rid) w.push(`${tokName(me)} est l'${ROLES[me.roleId].name} : donnez une fausse information`);
+    else if (state.reminders.some((r) => r.tokenUid === me.uid && /^(Empoisonné|Ivre)/.test(r.label))) w.push(`${tokName(me)} est ivre ou empoisonné : l'information peut être fausse`);
+    if (ROLES[rid]?.team === "townsfolk" && state.tokens.some((t) => t.roleId === "vortox" && !t.dead)) w.push("Vortox en jeu : l'information doit être fausse");
+    if (involved.some((t) => t.roleId === "recluse")) w.push("le Reclus peut être perçu comme Mauvais");
+    if (involved.some((t) => t.roleId === "spy")) w.push("l'Espion peut être perçu comme Bon");
+    return { answer, note: `Réponse réelle : ${label}.${w.length ? ` Attention : ${w.join(" ; ")}.` : ""}`, warn: w.length > 0 };
+  }
+
   function killPlan(t, by, extra = {}) {
     const w = protections(t, by);
     return {
@@ -903,6 +920,87 @@
   // run pour l'appliquer, show pour l'écran à montrer, stay pour rester sur l'étape
   const NIGHT_ACTIONS = {
     washerwoman: pairInfo("townsfolk", "Villageois"),
+    chef: {
+      plan(me) {
+        const ring = seats();
+        const pairs = ring.filter((t, i) => ring.length > 1 && alignOf(t) === "evil" && alignOf(ring[(i + 1) % ring.length]) === "evil").length;
+        return infoPlan(me, String(pairs), `paire${pairs > 1 ? "s" : ""} de joueurs Mauvais voisins`, ring);
+      },
+    },
+    empath: {
+      plan(me) {
+        const near = aliveNeighbours(me);
+        const n = near.filter((t) => alignOf(t) === "evil").length;
+        return infoPlan(me, String(n), `voisin${n > 1 ? "s" : ""} vivant${n > 1 ? "s" : ""} Mauvais (${near.map(tokName).join(" et ")})`, near);
+      },
+    },
+    clockmaker: {
+      plan(me) {
+        const ring = seats(), n = ring.length;
+        const demons = ring.filter((t) => teamOf(t) === "demon"), minions = ring.filter((t) => teamOf(t) === "minion");
+        if (!demons.length || !minions.length) return { note: "Il faut un Démon et un Sbire en jeu pour calculer la distance." };
+        const gap = (a, b) => { const d = Math.abs(ring.indexOf(a) - ring.indexOf(b)); return Math.min(d, n - d); };
+        const d = Math.min(...demons.flatMap((x) => minions.map((y) => gap(x, y))));
+        return infoPlan(me, String(d), `place${d > 1 ? "s" : ""} entre le Démon et son Sbire le plus proche`, ring);
+      },
+    },
+    oracle: {
+      plan(me) {
+        const dead = state.tokens.filter((t) => t.dead);
+        const n = dead.filter((t) => alignOf(t) === "evil").length;
+        return infoPlan(me, String(n), `joueur${n > 1 ? "s" : ""} mort${n > 1 ? "s" : ""} Mauvais`, dead);
+      },
+    },
+    fortuneteller: {
+      prompt: "2 joueurs désignés",
+      count: 2,
+      pool: () => state.tokens,
+      sub: () => !holder("fortuneteller", "Leurre") && { prompt: "Leurre : un joueur Bon, perçu comme le Démon", pool: state.tokens.filter((t) => alignOf(t) === "good") },
+      plan(me, picks, role, rid, herring) {
+        const red = herring || holder("fortuneteller", "Leurre");
+        const base = herring ? { button: `Poser « Leurre » sur ${tokName(herring)}`, stay: true, run() { placeReminder(herring, "fortuneteller", "Leurre"); } } : {};
+        if (picks.length < 2) return herring ? { note: "Le Leurre compte comme le Démon pour la Diseuse.", ...base } : null;
+        const yes = picks.some((t) => teamOf(t) === "demon" || t === red);
+        return { ...infoPlan(me, yes ? "Oui" : "Non", yes ? "l'un d'eux est le Démon ou le Leurre" : "aucun n'est le Démon ni le Leurre", picks), ...base };
+      },
+    },
+    seamstress: {
+      prompt: "2 joueurs désignés (une fois par partie)",
+      when: (me) => !hasReminder(me, "seamstress", "Sans pouvoir"),
+      count: 2,
+      pool: (me) => others(me),
+      plan(me, picks) {
+        if (picks.length < 2) return null;
+        const same = alignOf(picks[0]) === alignOf(picks[1]);
+        return {
+          ...infoPlan(me, same ? "Oui" : "Non", same ? "même alignement" : "alignements différents", picks),
+          button: "Capacité utilisée",
+          run() { placeReminder(me, "seamstress", "Sans pouvoir"); },
+        };
+      },
+    },
+    chambermaid: {
+      prompt: "2 joueurs vivants désignés",
+      count: 2,
+      pool: (me) => others(me).filter((t) => !t.dead),
+      plan(me, picks) {
+        if (picks.length < 2) return null;
+        const woke = picks.filter((t) => state.log.some((e) => e.type === "wake" && e.phase === state.phase && e.key.startsWith(t.uid + ":")));
+        return infoPlan(me, String(woke.length), `réveillé${woke.length > 1 ? "s" : ""} cette nuit par sa capacité${woke.length ? ` (${woke.map(tokName).join(", ")})` : ""}. Les joueurs qui agissent plus tard ne sont pas encore comptés`, []);
+      },
+    },
+    towncrier: {
+      plan(me) {
+        const by = state.log.filter((e) => e.type === "nomination" && e.phase === state.phase - 1 && ROLES[e.by?.roleId]?.team === "minion");
+        return infoPlan(me, by.length ? "Oui" : "Non", by.length ? `un Sbire a nominé aujourd'hui (${by.map((e) => e.by.player || ROLES[e.by.roleId].name).join(", ")})` : "aucun Sbire n'a nominé aujourd'hui", []);
+      },
+    },
+    sage: {
+      plan(me) {
+        const demon = state.tokens.find((t) => teamOf(t) === "demon" && !t.dead) || state.tokens.find((t) => teamOf(t) === "demon");
+        return demon && { note: `S'il a été tué par le Démon : désignez ${tokName(demon)} et un autre joueur.` };
+      },
+    },
     librarian: pairInfo("outsider", "Étranger"),
     investigator: pairInfo("minion", "Sbire"),
     undertaker: revealOf("Joueur exécuté aujourd'hui", "Le joueur exécuté était", () => state.tokens.filter((t) => t.dead), {
@@ -1246,7 +1344,7 @@
     const subPick = sub && sub.pool.find((t) => t.uid === act.sub) || null;
     let plan = a.plan(me, picks, role, step.role.id, subPick) || null;
     // l'Ivrogne agit comme le Villageois qu'il croit être : seuls les écrans et rappels restent
-    if (plan && me.roleId !== step.role.id && !plan.stay) plan = { note: `${tokName(me)} est l'${ROLES[me.roleId].name} : l'effet ne s'applique pas.` };
+    if (plan && me.roleId !== step.role.id && plan.run && !plan.stay && !plan.answer) plan = { note: `${tokName(me)} est l'${ROLES[me.roleId].name} : l'effet ne s'applique pas.` };
     return { a, me, pool, picks, roles, role, sub, subPick, plan };
   }
   const countOf = (a, me) => (typeof a.count === "function" ? a.count(me) : a.count || 1);
@@ -1283,6 +1381,7 @@
           <label class="act-label">${escapeHtml(a.rolePrompt)}
             <select class="act-role" data-act-role><option value="">Choisir…</option>${groups}</select>
           </label>` : ""}
+        ${plan?.answer ? `<p class="act-answer">${escapeHtml(plan.answer)}</p>` : ""}
         ${plan?.note ? `<p class="act-note ${plan.warn ? "warn" : ""}">${escapeHtml(plan.note)}</p>` : ""}
         ${plan?.button && (plan.run || plan.show) ? `<button class="btn act-run ${plan.warn ? "warn" : ""}" data-act-run>${escapeHtml(plan.button)}</button>` : ""}
       </div>`;
