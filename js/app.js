@@ -463,6 +463,7 @@
   let currentPanel = null;
   let nightTab = null;
   let search = "";
+  let roleTeam = "townsfolk";
 
   function openPanel(name) {
     if (currentPanel === name && panel.classList.contains("open")) { closePanel(); return; }
@@ -486,66 +487,90 @@
     $("#panelTitle").textContent = titles[currentPanel];
     const body = $("#panelBody");
     const scroll = body.scrollTop;
+    const listScroll = $("#rpList")?.scrollTop || 0;
+    panel.classList.toggle("wide", currentPanel === "roles");
     if (currentPanel === "roles") body.innerHTML = rolesPanel();
     if (currentPanel === "night") body.innerHTML = nightPanel();
     if (currentPanel === "rules") body.innerHTML = rulesPanel();
     if (currentPanel === "journal") body.innerHTML = journalPanel();
     body.scrollTop = scroll;
+    if ($("#rpList")) $("#rpList").scrollTop = listScroll;
   }
 
   function rolesPanel() {
     const dist = DISTRIBUTION[Math.min(state.players, 15)] || [0, 0, 0, 0];
-    const teamKeys = ["townsfolk", "outsider", "minion", "demon"];
-    const counts = teamKeys.map((k) => state.tokens.filter((t) => ROLES[t.roleId].team === k).length);
-    const travellers = state.tokens.filter((t) => ROLES[t.roleId].team === "traveller").length;
-
+    const teamKeys = ["townsfolk", "outsider", "minion", "demon", "traveller"];
     const filters = [["all", "Tous"], ["tb", "Trouble Brewing"], ["bmr", "Bad Moon Rising"], ["snv", "Sects & Violets"]];
-    const q = search.trim().toLowerCase();
+    const norm = (v) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const q = norm(search.trim());
     const matches = (r) =>
       (state.filter === "all" || r.edition === state.filter) &&
-      (!q || r.name.toLowerCase().includes(q) || r.en.toLowerCase().includes(q));
+      (!q || norm(r.name).includes(q) || norm(r.en).includes(q));
+    const rolesOf = (team) => Object.values(ROLES).filter((r) => r.team === team && matches(r));
 
-    const groups = [...teamKeys, "traveller"].map((team) => {
-      const roles = Object.values(ROLES).filter((r) => r.team === team && matches(r));
+    // Colonne de gauche : un onglet par type, avec la répartition attendue
+    const tabs = teamKeys.map((k, i) => {
+      const n = state.tokens.filter((t) => ROLES[t.roleId].team === k).length;
+      const target = k === "traveller" ? null : dist[i];
+      const status = target === null ? "" : n === target ? "ok" : n > target ? "over" : "under";
+      const hits = q ? rolesOf(k).length : 0;
+      const sub = q ? (hits ? `${hits} résultat${hits > 1 ? "s" : ""}` : "aucun résultat")
+        : target === null ? "hors répartition" : status === "ok" ? "complet" : status === "over" ? "en trop" : `il en manque ${target - n}`;
+      const active = !q && k === roleTeam;
+      return `
+        <button class="rp-tab team-${k} ${active ? "active" : ""} ${status} ${q && !hits ? "empty" : ""}" role="tab" aria-selected="${active}" data-team="${k}">
+          ${sigil(k, "h-sigil")}
+          <span class="rp-tab-text"><span class="rp-tab-name">${TEAMS[k].plural}</span><span class="rp-tab-sub">${sub}</span></span>
+          <b class="rp-count">${n}${target === null ? "" : `<small>/${target}</small>`}</b>
+        </button>`;
+    }).join("");
+
+    const row = (r) => `
+      <button class="role-row ${inPlay(r.id) ? "selected" : ""}" data-role="${r.id}" aria-pressed="${inPlay(r.id)}">
+        <span class="mini team-${r.team}">${monogram(r.name)}</span>
+        <span class="role-text">
+          <span class="role-name">${escapeHtml(r.name)}${state.filter === "all" ? `<em>${r.edition.toUpperCase()}</em>` : ""}</span>
+          <span class="role-ability">${escapeHtml(r.ability)}</span>
+        </span>
+        <span class="check" aria-hidden="true">${inPlay(r.id) ? "✓" : "+"}</span>
+      </button>`;
+
+    // Colonne de droite : le type choisi, ou les résultats de recherche de tous les types
+    const shown = q ? teamKeys : [roleTeam];
+    const groups = shown.map((team) => {
+      const roles = rolesOf(team);
       if (!roles.length) return "";
       return `
         <section class="role-group">
-          <h3 class="team-text-${team}">${sigil(team, "h-sigil")} ${TEAMS[team].plural}</h3>
-          ${roles.map((r) => `
-            <button class="role-row ${inPlay(r.id) ? "selected" : ""}" data-role="${r.id}" aria-pressed="${inPlay(r.id)}">
-              <span class="mini team-${r.team}">${monogram(r.name)}</span>
-              <span class="role-text">
-                <span class="role-name">${escapeHtml(r.name)}${state.filter === "all" ? `<em>${r.edition.toUpperCase()}</em>` : ""}</span>
-                <span class="role-ability">${escapeHtml(r.ability)}</span>
-              </span>
-              <span class="check" aria-hidden="true">${inPlay(r.id) ? "✓" : "+"}</span>
-            </button>`).join("")}
+          <h3 class="team-text-${team}">${sigil(team, "h-sigil")} ${TEAMS[team].plural}<span>${roles.length}</span></h3>
+          ${roles.map(row).join("")}
         </section>`;
     }).join("");
 
     return `
-      <div class="setup-card">
-        <div class="players-ctl">
-          <span>Joueurs</span>
-          <button class="icon-btn" data-players="-1" aria-label="Moins de joueurs">−</button>
-          <b>${state.players}</b>
-          <button class="icon-btn" data-players="1" aria-label="Plus de joueurs">+</button>
+      <div class="rp">
+        <div class="rp-side">
+          <div class="players-ctl">
+            <span>Joueurs</span>
+            <button class="icon-btn" data-players="-1" aria-label="Moins de joueurs">−</button>
+            <b>${state.players}</b>
+            <button class="icon-btn" data-players="1" aria-label="Plus de joueurs">+</button>
+          </div>
+          <div class="rp-tabs" role="tablist" aria-orientation="vertical" aria-label="Types de personnage">${tabs}</div>
+          <p class="hint">Pensez aux modificateurs entre crochets (Baron, Parrain, Fang Gu…).</p>
         </div>
-        <div class="dist-row">
-          ${teamKeys.map((k, i) => `
-            <div class="dist-cell ${counts[i] === dist[i] ? "ok" : counts[i] > dist[i] ? "over" : ""}">
-              <span class="team-text-${k}">${TEAMS[k].plural}</span>
-              <b>${counts[i]}<small>/${dist[i]}</small></b>
-            </div>`).join("")}
+        <div class="rp-main">
+          <div class="rp-tools">
+            <input class="search" type="search" id="roleSearch" placeholder="Rechercher dans tous les types…" value="${escapeHtml(search)}">
+            <div class="filters">
+              ${filters.map(([k, l]) => `<button class="chip ${state.filter === k ? "active" : ""}" data-filter="${k}">${l}</button>`).join("")}
+            </div>
+          </div>
+          <div class="rp-list" id="rpList">
+            ${groups || `<p class="hint">${q ? "Aucun rôle ne correspond à cette recherche." : "Aucun rôle de ce type dans cette édition."}</p>`}
+          </div>
         </div>
-        ${travellers ? `<p class="hint">+ ${travellers} Voyageur${travellers > 1 ? "s" : ""}</p>` : ""}
-        <p class="hint">Pensez aux modificateurs entre crochets (Baron, Parrain, Fang Gu…).</p>
-      </div>
-      <div class="filters">
-        ${filters.map(([k, l]) => `<button class="chip ${state.filter === k ? "active" : ""}" data-filter="${k}">${l}</button>`).join("")}
-      </div>
-      <input class="search" type="search" id="roleSearch" placeholder="Rechercher un rôle…" value="${escapeHtml(search)}">
-      ${groups || `<p class="hint">Aucun rôle trouvé.</p>`}`;
+      </div>`;
   }
 
   // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu
@@ -926,6 +951,7 @@
     const roleBtn = e.target.closest("[data-role]");
     const players = e.target.closest("[data-players]");
     const filter = e.target.closest("[data-filter]");
+    const teamTab = e.target.closest("[data-team]");
     const night = e.target.closest("[data-night]");
     const check = e.target.closest("[data-check]");
     if (roleBtn) {
@@ -939,6 +965,11 @@
         if (state.phase > 0) logEvent("role-add", { roleId: id });
       }
       commit();
+    } else if (teamTab) {
+      roleTeam = teamTab.dataset.team;
+      search = "";
+      renderPanel();
+      $("#rpList").scrollTop = 0;
     } else if (players) {
       state.players = Math.min(20, Math.max(5, state.players + Number(players.dataset.players)));
       commit();

@@ -9,7 +9,7 @@ Une app web simple pour gérer une partie de *Blood on the Clocktower* quand on 
 
 ## Fonctionnalités
 
-- **Rôles** : choisissez les personnages en jeu parmi les scripts *Trouble Brewing*, *Bad Moon Rising*, *Sects & Violets* et les Voyageurs. Le panneau compare la répartition choisie à celle recommandée pour le nombre de joueurs.
+- **Rôles** : choisissez les personnages en jeu parmi les scripts *Trouble Brewing*, *Bad Moon Rising*, *Sects & Violets* et les Voyageurs. Le panneau occupe la moitié de l'écran : à gauche, les types (Villageois, Étrangers, Sbires, Démons, Voyageurs) avec la répartition choisie comparée à celle recommandée ; à droite, la liste du type sélectionné. La recherche par nom porte sur tous les types.
 - **Grimoire** : chaque rôle choisi devient un jeton que vous déplacez librement. Le bouton « Cercle » range tous les jetons en cercle, et le curseur règle leur taille.
 - **Fiche du jeton** : cliquez sur un jeton pour lire sa capacité, saisir le nom du joueur, le marquer mort, suivre son vote fantôme et poser des rappels.
 - **Rappels** : ils sont aimantés autour du jeton du joueur et le suivent quand il bouge. Chaque rappel de rôle existe en un seul exemplaire, comme les vrais jetons : poser « Empoisonné » sur un autre joueur le déplace. Glissez un rappel sur un autre jeton pour le changer de joueur ; lâché dans le vide, il revient à sa place. Touchez-le puis ✕ pour le retirer.
