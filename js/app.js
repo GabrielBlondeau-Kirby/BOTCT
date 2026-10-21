@@ -600,7 +600,12 @@
       </div>`;
   }
 
-  // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu
+  // Un joueur mort perd sa capacité, sauf celles qui se déclenchent à la mort
+  // (et le Zombuul, qui paraît mort mais vit encore)
+  const WORKS_DEAD = new Set(["ravenkeeper", "sage", "moonchild", "sweetheart", "barber", "zombuul"]);
+  const keepsAbility = (t, id) => !t.dead || WORKS_DEAD.has(id) || hasReminder(t, "vigormortis", "Garde sa capacité");
+
+  // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu et aux capacités actives
   function nightItems(first) {
     const order = first ? FIRST_NIGHT : OTHER_NIGHT;
     const bigGame = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length >= 7;
@@ -614,7 +619,7 @@
       const role = ROLES[id];
       const text = first ? role.firstNight : role.otherNight;
       // l'Ivrogne se réveille comme le Villageois qu'il croit être
-      for (const t of state.tokens.filter((x) => x.roleId === id || (x.roleId === "drunk" && x.believes === id))) {
+      for (const t of state.tokens.filter((x) => (x.roleId === id || (x.roleId === "drunk" && x.believes === id)) && keepsAbility(x, id))) {
         items.push({ key: t.uid + ":" + id, role, token: t, text });
       }
     }
