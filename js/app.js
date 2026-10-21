@@ -603,7 +603,8 @@
   // Un joueur mort perd sa capacité, sauf celles qui se déclenchent à la mort
   // (et le Zombuul, qui paraît mort mais vit encore)
   const WORKS_DEAD = new Set(["ravenkeeper", "sage", "moonchild", "sweetheart", "barber", "zombuul"]);
-  const keepsAbility = (t, id) => !t.dead || WORKS_DEAD.has(id) || hasReminder(t, "vigormortis", "Garde sa capacité");
+  const keepsAbility = (t, id) => !t.dead || WORKS_DEAD.has(id)
+    || hasReminder(t, "vigormortis", "Garde sa capacité") || hasReminder(t, "bonecollector", "A sa capacité");
 
   // Étapes de la nuit, dans l'ordre officiel, limitées aux rôles en jeu et aux capacités actives
   function nightItems(first) {
@@ -916,10 +917,81 @@
     ...extra.opts,
   });
 
+  // Poser le rappel du rôle sur le joueur désigné (il est déplacé s'il était déjà posé)
+  const marker = (prompt, label, pool) => ({
+    prompt, pool,
+    plan: (me, [t], role, rid) => t && {
+      note: `« ${label} » sur ${tokName(t)}.`,
+      button: `Poser « ${label} »`,
+      run() { placeReminder(t, rid, label); },
+    },
+  });
+
   // pool : joueurs désignables ; roles : personnages proposés ; plan : effet décrit,
   // run pour l'appliquer, show pour l'écran à montrer, stay pour rester sur l'étape
   const NIGHT_ACTIONS = {
     washerwoman: pairInfo("townsfolk", "Villageois"),
+    monk: marker("Joueur protégé du Démon", "Protégé", (me) => others(me).filter((t) => !t.dead)),
+    butler: marker("Son Maître", "Maître", others),
+    devilsadvocate: marker("Joueur vivant (différent de la nuit dernière)", "Survit à l'exécution",
+      () => alive().filter((t) => !hasReminder(t, "devilsadvocate", "Survit à l'exécution"))),
+    witch: { ...marker("Joueur maudit", "Maudit", alive), when: () => alive().length > 3 },
+    bureaucrat: marker("Joueur dont le vote compte triple", "3 votes", (me) => others(me).filter((t) => !t.dead)),
+    thief: marker("Joueur dont le vote compte négativement", "Vote négatif", (me) => others(me).filter((t) => !t.dead)),
+    sailor: {
+      prompt: "Joueur vivant désigné",
+      pool: (me) => others(me).filter((t) => !t.dead),
+      sub: (me, [t]) => t && { prompt: "Lequel des deux est ivre ?", pool: [me, t] },
+      plan: (me, [t], role, rid, drunk) => t && (drunk
+        ? { note: `${tokName(drunk)} est ivre jusqu'au crépuscule.`, button: "Poser « Ivre »", run() { placeReminder(drunk, rid, "Ivre"); } }
+        : { note: "Choisissez lequel des deux est ivre." }),
+    },
+    innkeeper: {
+      prompt: "2 joueurs protégés",
+      count: 2,
+      pool: alive,
+      sub: (me, picks) => picks.length === 2 && { prompt: "Lequel des deux est ivre ?", pool: picks },
+      plan: (me, picks, role, rid, drunk) => picks.length === 2 && (drunk
+        ? {
+          note: `${picks.map(tokName).join(" et ")} ne peuvent pas mourir cette nuit ; ${tokName(drunk)} est ivre.`,
+          button: "Poser les rappels",
+          run() { picks.forEach((t) => placeReminder(t, rid, "Protégé")); placeReminder(drunk, rid, "Ivre"); },
+        }
+        : { note: "Choisissez lequel des deux est ivre." }),
+    },
+    courtier: {
+      rolePrompt: "Personnage choisi (une fois par partie)",
+      roles: (me) => (hasReminder(me, "courtier", "Sans pouvoir") ? [] : scriptRoles(["townsfolk", "outsider", "minion", "demon"])),
+      plan(me, picks, role, rid) {
+        if (hasReminder(me, "courtier", "Sans pouvoir")) {
+          const r = state.reminders.find((x) => x.roleId === "courtier" && /^Ivre \d$/.test(x.label));
+          if (!r) return { note: "La capacité est utilisée et l'ivresse est terminée." };
+          const t = tokenByUid(r.tokenUid), n = Number(r.label.slice(-1)) - 1;
+          return {
+            note: n ? `${tokName(t)} reste ivre : « ${r.label} » devient « Ivre ${n} ».` : `L'ivresse de ${tokName(t)} se termine.`,
+            button: n ? "Décompter" : "Retirer « Ivre 1 »",
+            run() { toggleReminder(t, "courtier", r.label); if (n) placeReminder(t, "courtier", `Ivre ${n}`); },
+          };
+        }
+        if (!role) return null;
+        const t = state.tokens.find((x) => x.roleId === role.id);
+        return {
+          note: t ? `${tokName(t)} (${role.name}) est ivre pendant 3 nuits et 3 jours.` : `${role.name} n'est pas en jeu : la capacité est utilisée sans effet.`,
+          button: "Appliquer",
+          run() { if (t) placeReminder(t, rid, "Ivre 3"); placeReminder(me, rid, "Sans pouvoir"); },
+        };
+      },
+    },
+    bonecollector: {
+      prompt: "Joueur mort qui retrouve sa capacité (une fois par partie)",
+      when: (me) => !hasReminder(me, "bonecollector", "Sans pouvoir"),
+      pool: () => state.tokens.filter((t) => t.dead),
+      plan: (me, [t]) => t && {
+        note: `${tokName(t)} retrouve sa capacité jusqu'au crépuscule.`,
+        button: "Poser les rappels",
+        run() { placeReminder(t, "bonecollector", "A sa capacité"); placeReminder(me, "bonecollector", "Sans pouvoir"); },
+      },
+    },
     chef: {
       plan(me) {
         const ring = seats();
