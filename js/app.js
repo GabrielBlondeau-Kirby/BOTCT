@@ -684,6 +684,7 @@
             ${isCurrent ? `
               <p class="rail-text">${escapeHtml(i.text)}</p>
               ${i.key === "_demoninfo" ? bluffPicker() : ""}
+              ${i.role?.id === "godfather" && isFirstNight() ? godfatherBox() : ""}
               ${i.token ? actionBox(i) : ""}
               <button class="btn primary rail-done" data-check="${i.key}">Fait, étape suivante</button>` : ""}
           </li>`;
@@ -893,10 +894,25 @@
   // Écran à montrer au Démon
   const showDialog = $("#bluffShow");
   function openBluffShow() {
+    openShow("Ces personnages ne sont pas en jeu", state.bluffs);
+  }
+  // Étrangers en jeu pour le Parrain : sans nom de joueur, triés par nom pour ne pas trahir les places
+  const outsidersInPlay = () => [...new Set(state.tokens.filter((t) => teamOf(t) === "outsider").map((t) => t.roleId))]
+    .sort((a, b) => ROLES[a].name.localeCompare(ROLES[b].name));
+  function godfatherBox() {
+    const n = outsidersInPlay().length;
+    return `
+      <div class="act">
+        <p class="act-note">${n ? `${n} Étranger${n > 1 ? "s" : ""} en jeu.` : "Aucun Étranger en jeu."}</p>
+        <button class="btn act-run" data-show-outsiders>Montrer au Parrain</button>
+      </div>`;
+  }
+  function openShow(title, roleIds, empty = "") {
     $("#bluffShowBody").innerHTML = `
-      <p class="show-title">Ces personnages ne sont pas en jeu</p>
+      <p class="show-title">${escapeHtml(title)}</p>
+      ${roleIds.length ? "" : `<p class="show-empty">${escapeHtml(empty)}</p>`}
       <div class="show-tokens">
-        ${state.bluffs.map((id) => {
+        ${roleIds.map((id) => {
           const r = ROLES[id];
           return `<div class="show-role"><div class="show-token">${tokenHtml(r)}</div>
             <p class="show-name">${escapeHtml(r.name)}</p><p class="show-ability">${escapeHtml(r.ability)}</p></div>`;
@@ -920,6 +936,8 @@
       commit();
     } else if (e.target.closest("[data-bluff-show]")) {
       openBluffShow();
+    } else if (e.target.closest("[data-show-outsiders]")) {
+      openShow("Les Étrangers en jeu", outsidersInPlay(), "Aucun Étranger n'est en jeu");
     } else if (e.target.closest("[data-act-pick]")) {
       const u = e.target.closest("[data-act-pick]").dataset.actPick;
       const n = NIGHT_ACTIONS[currentNightStep()?.role?.id]?.count || 1;
