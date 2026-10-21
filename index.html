@@ -24,7 +24,8 @@
 
     <nav class="actions">
       <button class="btn" data-panel="roles">Rôles <span class="pill" id="roleCount">0</span></button>
-      <button class="btn" data-panel="night">Ordre de nuit</button>
+      <button class="btn night-only" data-panel="night">Ordre de nuit</button>
+      <button class="btn day-only trial-btn" data-trial>Jugements</button>
       <button class="btn" data-panel="journal">Journal</button>
       <button class="btn" data-panel="rules">Règles</button>
       <span class="sep" aria-hidden="true"></span>
@@ -191,6 +192,10 @@
 
   <dialog class="bluff-show" id="bluffShow" aria-label="Bluffs du Démon">
     <div class="bluff-show-inner" id="bluffShowBody"></div>
+  </dialog>
+
+  <dialog class="trial" id="trial" aria-label="Jugements de la journée">
+    <div class="trial-inner" id="trialBody"></div>
   </dialog>
 
   <dialog class="recap" id="recap" aria-label="Récapitulatif de partie">
