@@ -15,6 +15,7 @@
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const uid = () => Math.random().toString(36).slice(2, 10);
+  const GAVEL = `<svg class="gavel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="nomine"><path d="m14 13-8.4 8.4a1 1 0 0 1-3-3l8.4-8.4"/><path d="m16 16 6-6"/><path d="m21.5 10.5-8-8"/><path d="m8 8 6-6"/><path d="m8.5 7.5 8 8"/></svg>`;
   const monogram = (name) => {
     const words = name.replace(/['’]/g, " ").split(/[\s-]+/).filter((w) => w.length > 2 || /^[A-ZÉ]/.test(w));
     return (words.length > 1 ? words[0][0] + words[words.length - 1][0] : name.slice(0, 2)).toUpperCase();
@@ -34,6 +35,7 @@
     log: [],         // journal : { id, phase, type, ...données au moment de l'événement }
     setup: null,     // composition figée à la fin de la 1re nuit
     ended: null,     // { winner: "good" | "evil", phase }
+    trial: null,     // jugements du jour en cours : { phase, mode, list: [{ by, target, votes, fate }] }
   });
 
   let state = load();
@@ -783,7 +785,7 @@
       case "nomination":
         return `<b>${escapeHtml(whoText(e.by))}</b> nomine <b>${escapeHtml(whoText(e.target))}</b>`
           + `${e.votes !== "" && e.votes != null ? ` : ${e.votes} vote${e.votes > 1 ? "s" : ""}` : ""}`
-          + `${e.executed ? ` → <b class="ev-death">exécuté</b>.` : "."}`;
+          + `${e.executed ? ` → <b class="ev-death">exécuté</b>.` : e.onBlock ? " → sur le billot, gracié." : "."}`;
       case "note": return `✎ ${escapeHtml(e.text)}`;
       case "end": return `<b>Fin de partie : victoire ${e.winner === "good" ? "du Bien" : "du Mal"}.</b>`;
       default: return escapeHtml(e.type);
@@ -800,23 +802,10 @@
     return [...groups.entries()].sort((x, y) => x[0] - y[0]);
   }
 
-  let journalForm = null; // brouillon de nomination
   function journalPanel() {
-    const options = (sel) => `<option value="">—</option>` + state.tokens.map((t) =>
-      `<option value="${t.uid}" ${sel === t.uid ? "selected" : ""}>${escapeHtml(whoText(who(t)))}${t.dead ? " †" : ""}</option>`).join("");
-    const f = journalForm || { by: "", target: "", votes: "", executed: false };
     const groups = groupedLog();
     return `
-      <form class="journal-form" id="nomForm">
-        <p class="journal-label">Nomination · ${phaseName(state.phase)}</p>
-        <label class="jf-row"><span>Nominateur</span><select id="nomBy">${options(f.by)}</select></label>
-        <label class="jf-row"><span>Nominé</span><select id="nomTarget">${options(f.target)}</select></label>
-        <div class="jf-row">
-          <label class="jf-votes"><span>Votes</span><input type="number" id="nomVotes" min="0" max="30" inputmode="numeric" value="${escapeHtml(f.votes)}"></label>
-          <label class="jf-check"><input type="checkbox" id="nomExecuted" ${f.executed ? "checked" : ""}> Exécuté</label>
-        </div>
-        <button class="btn primary small" type="submit">Noter la nomination</button>
-      </form>
+      ${isNight() ? "" : `<button class="btn primary journal-trial" data-trial>${GAVEL} Jugements · ${phaseName(state.phase)}</button>`}
       <form class="journal-form" id="noteForm">
         <p class="journal-label">Note libre</p>
         <textarea id="noteInput" rows="2" placeholder="Ex. : Léo prétend être le Cuisinier, il annonce 1."></textarea>
@@ -831,7 +820,7 @@
               <li class="ev ev-${e.type}"><span>${describe(e)}</span>
                 <button class="ev-del" data-ev-del="${e.id}" aria-label="Supprimer cette entrée">✕</button></li>`).join("")}
             </ul>
-          </section>`).join("") : `<p class="hint">Le journal se remplit tout seul : morts, rappels, réveils, bluffs… Ajoutez les nominations et vos notes ci-dessus.</p>`}
+          </section>`).join("") : `<p class="hint">Le journal se remplit tout seul : morts, rappels, réveils, bluffs… Les jugements s'y ajoutent une fois validés.</p>`}
       </div>
 
       <div class="journal-end">
@@ -845,6 +834,201 @@
              </div>`}
       </div>`;
   }
+
+  // ───────── Jugements de la journée ─────────
+  // Le Conteur saisit chaque nomination (nominateur, nominé, votes), puis tranche qui meurt.
+  const trial = $("#trial");
+  let trialDraft = { by: null, target: null, votes: 0 };
+
+  function currentTrial() {
+    if (!state.trial || state.trial.phase !== state.phase) state.trial = { phase: state.phase, mode: "vote", list: [] };
+    state.trial.list = state.trial.list.filter((j) => tokenByUid(j.by) && tokenByUid(j.target));
+    return state.trial;
+  }
+  // Il faut au moins le seuil et strictement plus que le meilleur score ; une égalité vide le billot.
+  function standings(list, threshold) {
+    let best = 0, leader = -1;
+    const status = list.map((j, i) => {
+      if (j.votes >= threshold && j.votes > best) { best = j.votes; leader = i; return "lead"; }
+      if (j.votes >= threshold && j.votes === best) { leader = -1; return "tie"; }
+      return "low";
+    });
+    return { best, leader, status };
+  }
+  const tokenName = (t) => t.player || ROLES[t.roleId].name;
+  const fateOf = (j, i, leader) => (j.fate === null || j.fate === undefined ? i === leader : j.fate);
+
+  function trialHtml() {
+    const tr = currentTrial();
+    const alive = state.tokens.filter((t) => !t.dead && ROLES[t.roleId].team !== "traveller").length;
+    const threshold = Math.ceil(alive / 2);
+    const ghosts = state.tokens.filter((t) => t.dead && !t.ghostUsed).length;
+    const maxVotes = state.tokens.filter((t) => !t.dead).length + ghosts;
+    const { best, leader, status } = standings(tr.list, threshold);
+    const nominators = tr.list.map((j) => j.by), nominated = tr.list.map((j) => j.target);
+    const d = trialDraft;
+    if (d.by && (!tokenByUid(d.by) || nominators.includes(d.by))) d.by = null;
+    if (d.target && (!tokenByUid(d.target) || nominated.includes(d.target))) d.target = null;
+    d.votes = Math.min(d.votes, maxVotes);
+    const leaderTok = leader >= 0 ? tokenByUid(tr.list[leader].target) : null;
+
+    const player = (t, kind, on, off, note) => `
+      <button class="tr-player ${kind} ${on ? "on" : ""}" data-tr-${kind}="${t.uid}" aria-pressed="${on}" ${off ? "disabled" : ""}>
+        <span class="mini team-${ROLES[t.roleId].team} ${t.dead ? "is-dead" : ""}">${monogram(ROLES[t.roleId].name)}</span>
+        <span class="tr-player-text"><b>${escapeHtml(tokenName(t))}</b><small>${escapeHtml(note)}</small></span>
+      </button>`;
+    const roleNote = (t) => (t.player ? ROLES[t.roleId].name : "");
+    const byCol = state.tokens.map((t) => {
+      const off = t.dead || nominators.includes(t.uid);
+      return player(t, "by", d.by === t.uid, off, t.dead ? "mort · ne nomine pas" : nominators.includes(t.uid) ? "a déjà nominé" : roleNote(t));
+    }).join("");
+    const targetCol = state.tokens.filter((t) => !nominated.includes(t.uid)).map((t) =>
+      player(t, "target", d.target === t.uid, t.uid === d.by, t.uid === d.by ? "nominateur" : t.dead ? "mort · peut être nominé" : roleNote(t))).join("");
+
+    const ready = !!(d.by && d.target);
+    let verdict = "Choisissez un nominateur et un nominé.", vClass = "";
+    if (ready) {
+      const tName = escapeHtml(tokenName(tokenByUid(d.target)));
+      if (d.votes < threshold) verdict = `Insuffisant : il faut ${threshold} votes.`;
+      else if (d.votes > best) { verdict = `${tName} passerait sur le billot.`; vClass = "lead"; }
+      else if (d.votes === best) { verdict = `Égalité à ${best} votes : plus personne sur le billot.`; vClass = "tie"; }
+      else verdict = `Pas assez pour battre ${best} votes.`;
+    }
+    const segments = Array.from({ length: maxVotes }, (_, i) =>
+      `<i class="${i < d.votes ? (d.votes >= threshold ? "on" : "low") : ""} ${i === threshold - 1 ? "mark" : ""}"></i>`).join("");
+
+    const cards = tr.list.map((j, i) => ({ j, i })).sort((a, b) => b.j.votes - a.j.votes || a.i - b.i).map(({ j, i }) => {
+      const s = status[i], isLeader = i === leader;
+      const chip = s === "lead" ? (isLeader ? "Sur le billot" : "Dépassé") : s === "tie" ? "Égalité" : "Insuffisant";
+      const dies = fateOf(j, i, leader);
+      const by = tokenByUid(j.by), target = tokenByUid(j.target);
+      return `
+        <div class="tr-card ${isLeader ? "leader" : ""}">
+          <span class="tr-card-n">#${i + 1}</span>
+          ${tr.mode === "vote" ? `<button class="tr-card-del" data-tr-del="${i}" aria-label="Supprimer ce jugement">✕</button>` : ""}
+          <b class="tr-card-votes">${j.votes}</b>
+          <span class="tr-card-who"><b class="by">${escapeHtml(tokenName(by))}</b>${GAVEL}<b class="target">${escapeHtml(tokenName(target))}</b></span>
+          ${tr.mode === "verdict"
+            ? `<span class="tr-fate" role="group" aria-label="Issue pour ${escapeHtml(tokenName(target))}">
+                 <button class="${dies ? "on dies" : ""}" data-tr-fate="${i}" data-dies="1" aria-pressed="${dies}">Meurt</button>
+                 <button class="${dies ? "" : "on lives"}" data-tr-fate="${i}" data-dies="0" aria-pressed="${!dies}">Survit</button>
+               </span>`
+            : `<span class="tr-chip ${isLeader ? "lead" : s === "lead" ? "passed" : s}">${chip}</span>`}
+        </div>`;
+    }).join("");
+    const deaths = tr.list.filter((j, i) => fateOf(j, i, leader)).map((j) => tokenName(tokenByUid(j.target)));
+    const names = (l) => l.map(escapeHtml).join(", ");
+
+    let footer;
+    if (tr.mode === "vote") footer = `
+      <span class="tr-foot-hint">Une fois les nominations terminées, passez au verdict.</span>
+      <button class="btn primary" data-tr-mode="verdict" ${tr.list.length ? "" : "disabled"}>Plus de jugement</button>`;
+    else if (tr.mode === "verdict") footer = `
+      <span class="tr-foot-hint">${deaths.length ? `Mort${deaths.length > 1 ? "s" : ""} : ${names(deaths)}` : "Aucune mort ce jour"}</span>
+      <button class="btn" data-tr-mode="vote">Reprendre les nominations</button>
+      <button class="btn primary" data-tr-validate>${deaths.length ? `Valider : ${names(deaths)} ${deaths.length > 1 ? "meurent" : "meurt"}` : "Valider : personne ne meurt"}</button>`;
+    else footer = `
+      <span class="tr-foot-hint">Enregistré dans le journal.</span>
+      <button class="btn" data-tr-close>Fermer</button>
+      <button class="btn primary" data-tr-night>Passer à la ${phaseName(state.phase + 1)}</button>`;
+
+    return `
+      <header class="tr-head">
+        <div class="tr-title">
+          <h2>Jugements · ${phaseName(state.phase)}</h2>
+          <p>${alive} vivants · <b>${threshold} votes</b> pour mettre sur le billot · ${ghosts} vote${ghosts > 1 ? "s" : ""} fantôme${ghosts > 1 ? "s" : ""} disponible${ghosts > 1 ? "s" : ""}</p>
+        </div>
+        <div class="tr-block ${leaderTok ? "has" : ""}">
+          <span>Sur le billot</span>
+          <b>${leaderTok ? `${escapeHtml(tokenName(leaderTok))} · ${best} votes` : best ? "Personne (égalité)" : "Personne"}</b>
+        </div>
+        <button class="icon-btn" data-tr-close aria-label="Fermer">✕</button>
+      </header>
+      ${tr.mode === "vote" ? `
+      <div class="tr-vote">
+        <section class="tr-col">
+          <h3 class="by">Nominateur</h3>
+          <div class="tr-list" data-scroll="by">${byCol || `<p class="hint">Ajoutez des rôles au Grimoire.</p>`}</div>
+        </section>
+        <section class="tr-center">
+          <p class="tr-duel"><b class="by ${d.by ? "" : "empty"}">${d.by ? escapeHtml(tokenName(tokenByUid(d.by))) : "Nominateur"}</b>${GAVEL}<b class="target ${d.target ? "" : "empty"}">${d.target ? escapeHtml(tokenName(tokenByUid(d.target))) : "Nominé"}</b></p>
+          <div class="tr-counter">
+            <button class="tr-step" data-tr-votes="-1" aria-label="Retirer un vote">−</button>
+            <div><b aria-live="polite">${d.votes}</b><span>votes</span></div>
+            <button class="tr-step" data-tr-votes="1" aria-label="Ajouter un vote">+</button>
+          </div>
+          <div class="tr-gauge" aria-hidden="true">${segments}</div>
+          <p class="tr-gauge-hint">Seuil ${threshold} · à battre ${best ? best + 1 : threshold} · maximum ${maxVotes}</p>
+          <p class="tr-verdict ${vClass}">${verdict}</p>
+          <button class="btn primary tr-record" data-tr-record ${ready ? "" : "disabled"}>Enregistrer le jugement</button>
+        </section>
+        <section class="tr-col">
+          <h3 class="target">Nominé</h3>
+          <div class="tr-list" data-scroll="target">${targetCol}</div>
+        </section>
+      </div>` : ""}
+      <section class="tr-history">
+        <div class="tr-history-head">
+          <h3>${tr.mode === "vote" ? "Historique des jugements" : tr.mode === "verdict" ? "Verdict du Conteur" : "Journée close"}</h3>
+          <span>${tr.mode === "vote" ? "Trié du plus grand nombre de votes au plus petit" : tr.mode === "verdict" ? "Proposé selon les votes, modifiable pour chaque nominé" : ""}</span>
+        </div>
+        <div class="tr-cards" data-scroll="cards">
+          ${cards || `<p class="hint">Aucun jugement pour l'instant. Choisissez un nominateur et un nominé.</p>`}
+          ${tr.mode === "done" ? `<p class="tr-done">${tr.result ? escapeHtml(tr.result) : ""}</p>` : ""}
+        </div>
+      </section>
+      <footer class="tr-foot">${footer}</footer>`;
+  }
+
+  function renderTrial() {
+    if (!trial.open) return;
+    const scrolls = {};
+    trial.querySelectorAll("[data-scroll]").forEach((el) => { scrolls[el.dataset.scroll] = el.scrollTop; });
+    $("#trialBody").innerHTML = trialHtml();
+    trial.querySelectorAll("[data-scroll]").forEach((el) => { el.scrollTop = scrolls[el.dataset.scroll] || 0; });
+  }
+  function openTrial() {
+    if (isNight()) return;
+    trial.open || trial.showModal();
+    renderTrial();
+  }
+
+  trial.addEventListener("click", (e) => {
+    const tr = currentTrial();
+    const btn = (sel) => e.target.closest(sel);
+    let b;
+    if (e.target === trial || btn("[data-tr-close]")) { trial.close(); return; }
+    if ((b = btn("[data-tr-by]"))) trialDraft.by = b.dataset.trBy;
+    else if ((b = btn("[data-tr-target]"))) trialDraft.target = b.dataset.trTarget;
+    else if ((b = btn("[data-tr-votes]"))) trialDraft.votes = Math.max(0, trialDraft.votes + Number(b.dataset.trVotes));
+    else if (btn("[data-tr-record]")) {
+      if (!trialDraft.by || !trialDraft.target) return;
+      tr.list.push({ by: trialDraft.by, target: trialDraft.target, votes: trialDraft.votes, fate: null });
+      trialDraft = { by: null, target: null, votes: 0 };
+    } else if ((b = btn("[data-tr-del]"))) tr.list.splice(Number(b.dataset.trDel), 1);
+    else if ((b = btn("[data-tr-mode]"))) tr.mode = b.dataset.trMode;
+    else if ((b = btn("[data-tr-fate]"))) tr.list[Number(b.dataset.trFate)].fate = b.dataset.dies === "1";
+    else if (btn("[data-tr-validate]")) {
+      const alive = state.tokens.filter((t) => !t.dead && ROLES[t.roleId].team !== "traveller").length;
+      const { leader } = standings(tr.list, Math.ceil(alive / 2));
+      const dead = [];
+      tr.list.forEach((j, i) => {
+        const by = tokenByUid(j.by), target = tokenByUid(j.target);
+        const executed = fateOf(j, i, leader);
+        logEvent("nomination", { by: who(by), target: who(target), votes: j.votes, executed, onBlock: i === leader });
+        if (executed) { target.dead = true; dead.push(tokenName(target)); }
+      });
+      tr.mode = "done";
+      tr.result = dead.length
+        ? `${dead.join(", ")} ${dead.length > 1 ? "sont exécutés" : "est exécuté"}. Jeton${dead.length > 1 ? "s" : ""} passé${dead.length > 1 ? "s" : ""} en mort.`
+        : "Personne n'est exécuté aujourd'hui.";
+    } else if (btn("[data-tr-night]")) {
+      trial.close();
+      setPhase(state.phase + 1);
+      return;
+    } else return;
+    commit();
+  });
 
   // Récapitulatif plein écran
   const recap = $("#recap");
@@ -1006,25 +1190,12 @@
   });
   panel.addEventListener("submit", (e) => {
     e.preventDefault();
-    if (e.target.id === "nomForm") {
-      const by = tokenByUid($("#nomBy").value), target = tokenByUid($("#nomTarget").value);
-      if (!by || !target) return;
-      const votes = $("#nomVotes").value === "" ? "" : Number($("#nomVotes").value);
-      const executed = $("#nomExecuted").checked;
-      logEvent("nomination", { by: who(by), target: who(target), votes, executed });
-      if (executed && !target.dead) target.dead = true;
-      journalForm = null;
-      commit();
-    } else if (e.target.id === "noteForm") {
+    if (e.target.id === "noteForm") {
       const text = $("#noteInput").value.trim();
       if (!text) return;
       logEvent("note", { text });
       commit();
     }
-  });
-  panel.addEventListener("change", (e) => {
-    if (!e.target.closest("#nomForm")) return;
-    journalForm = { by: $("#nomBy").value, target: $("#nomTarget").value, votes: $("#nomVotes").value, executed: $("#nomExecuted").checked };
   });
   panel.addEventListener("input", (e) => {
     if (e.target.id !== "roleSearch") return;
@@ -1056,6 +1227,7 @@
   document.addEventListener("click", (e) => {
     const p = e.target.closest("[data-panel]");
     if (p) openPanel(p.dataset.panel);
+    if (e.target.closest("[data-trial]")) openTrial();
   });
   $("#panelClose").addEventListener("click", closePanel);
   $("#phasePrev").addEventListener("click", () => setPhase(state.phase - 1));
@@ -1087,7 +1259,8 @@
     btn.classList.remove("confirming");
     const { players, tokenSize, filter } = state;
     state = { ...defaultState(), players, tokenSize, filter };
-    journalForm = null;
+    trialDraft = { by: null, target: null, votes: 0 };
+    trial.open && trial.close();
     sheet.open && sheet.close();
     document.body.classList.remove("is-day");
     commit();
@@ -1106,6 +1279,7 @@
     renderRail();
     renderBoard();
     renderPanel();
+    renderTrial();
   }
 
   // Ciel étoilé : positions fixes tirées une fois
