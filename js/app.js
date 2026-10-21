@@ -32,6 +32,7 @@
     filter: "all",
     railHidden: false,
     bluffs: [],      // 3 rôles Bons non en jeu montrés au Démon
+    lunaticBluffs: [], // faux bluffs montrés au Fou
     log: [],         // journal : { id, phase, type, ...données au moment de l'événement }
     setup: null,     // composition figée à la fin de la 1re nuit
     ended: null,     // { winner: "good" | "evil", phase }
@@ -100,7 +101,8 @@
     : [...new Set(state.tokens.map((t) => ROLES[t.roleId]).filter((r) => r.team !== "traveller").map((r) => r.edition))];
   const scriptRoles = (teams) => teams.flatMap((team) =>
     Object.values(ROLES).filter((r) => r.team === team && scriptEditions().includes(r.edition)));
-  const bluffCandidates = () => scriptRoles(["townsfolk", "outsider"]).filter((r) => !inPlay(r.id));
+  const bluffCandidates = () => scriptRoles(["townsfolk", "outsider"])
+    .filter((r) => !inPlay(r.id) && !state.tokens.some((t) => t.believes === r.id));
   function toggleBluff(id) {
     if (state.bluffs.includes(id)) state.bluffs = state.bluffs.filter((b) => b !== id);
     else if (state.bluffs.length < 3) state.bluffs = [...state.bluffs, id];
@@ -218,6 +220,7 @@
       el.style.top = t.y + "%";
       el.innerHTML = tokenHtml(role) +
         (t.dead ? `<span class="shroud" title="${t.ghostUsed ? "Vote fantôme utilisé" : "Vote fantôme disponible"}">${t.ghostUsed ? "" : "<i></i>"}</span>` : "") +
+        (t.align ? `<span class="align-badge ${t.align}" title="Alignement changé">${ALIGN[t.align]}</span>` : "") +
         `<span class="player-tag${t.player ? "" : " empty"}">${escapeHtml(t.player || "—")}</span>`;
       el.setAttribute("role", "button");
       el.setAttribute("aria-label", `${role.name}${t.player ? ", " + t.player : ""}${t.dead ? ", mort" : ""}`);
@@ -402,6 +405,18 @@
             ${t.ghostUsed ? "Vote fantôme utilisé" : "Vote fantôme dispo"}
           </button>
         </div>
+        <div class="toggles">
+          <button class="toggle align-${alignOf(t)} ${t.align ? "on" : ""}" data-align title="Changer l'alignement">Alignement : ${ALIGN[alignOf(t)]}</button>
+        </div>
+        ${believesTeam[t.roleId] ? `
+        <label class="field">
+          <span>Pense être</span>
+          <select id="believesInput">
+            <option value="">Choisir…</option>
+            ${scriptRoles([believesTeam[t.roleId]]).filter((r) => r.id !== t.roleId).map((r) =>
+              `<option value="${r.id}" ${t.believes === r.id ? "selected" : ""}>${escapeHtml(r.name)}${inPlay(r.id) ? " (en jeu)" : ""}</option>`).join("")}
+          </select>
+        </label>` : ""}
       </div>
 
       <div class="sheet-section">
@@ -432,6 +447,10 @@
       if (key === "dead") logEvent(t.dead ? "death" : "revive", { who: who(t) });
       if (key === "ghostUsed") logEvent(t.ghostUsed ? "ghost" : "ghost-back", { who: who(t) });
       commit(); renderSheet();
+    } else if (e.target.closest("[data-align]")) {
+      setAlign(t, alignOf(t) === "good" ? "evil" : "good");
+      logEvent("align", { who: who(t), align: alignOf(t) });
+      commit(); renderSheet();
     } else if (remChip) {
       toggleReminder(t, remChip.dataset.remRole || null, remChip.dataset.remLabel);
       commit(); renderSheet();
@@ -441,6 +460,13 @@
       sheet.close();
       commit();
     }
+  });
+  // L'Ivrogne croit être un Villageois, le Fou croit être le Démon
+  const believesTeam = { drunk: "townsfolk", lunatic: "demon" };
+  sheet.addEventListener("change", (e) => {
+    if (e.target.id !== "believesInput") return;
+    const t = state.tokens.find((x) => x.uid === sheetUid);
+    if (t) { t.believes = e.target.value || undefined; commit(); }
   });
   sheet.addEventListener("input", (e) => {
     if (e.target.id !== "playerInput") return;
@@ -587,7 +613,8 @@
       }
       const role = ROLES[id];
       const text = first ? role.firstNight : role.otherNight;
-      for (const t of state.tokens.filter((x) => x.roleId === id)) {
+      // l'Ivrogne se réveille comme le Villageois qu'il croit être
+      for (const t of state.tokens.filter((x) => x.roleId === id || (x.roleId === "drunk" && x.believes === id))) {
         items.push({ key: t.uid + ":" + id, role, token: t, text });
       }
     }
@@ -595,7 +622,7 @@
   }
   const nightItemName = (i) => i.special
     ? escapeHtml(i.name)
-    : `<span class="team-text-${i.role.team}">${escapeHtml(i.role.name)}</span>${i.token.player ? ` · ${escapeHtml(i.token.player)}` : ""}${i.token.dead ? ` <em>(mort)</em>` : ""}`;
+    : `<span class="team-text-${i.role.team}">${escapeHtml(i.role.name)}</span>${i.token.player ? ` · ${escapeHtml(i.token.player)}` : ""}${i.token.roleId !== i.role.id ? ` <em>(${escapeHtml(ROLES[i.token.roleId].name)})</em>` : ""}${i.token.dead ? ` <em>(mort)</em>` : ""}`;
 
   // Cocher une étape la journalise ; la décocher retire l'entrée de cette nuit
   function toggleNightCheck(k) {
@@ -684,7 +711,6 @@
             ${isCurrent ? `
               <p class="rail-text">${escapeHtml(i.text)}</p>
               ${i.key === "_demoninfo" ? bluffPicker() : ""}
-              ${i.role?.id === "godfather" && isFirstNight() ? godfatherBox() : ""}
               ${i.token ? actionBox(i) : ""}
               <button class="btn primary rail-done" data-check="${i.key}">Fait, étape suivante</button>` : ""}
           </li>`;
@@ -717,7 +743,7 @@
         <div class="chips">${group("townsfolk") || `<span class="hint">Aucun</span>`}</div>
         <p class="bluff-label team-text-outsider">Étrangers non en jeu</p>
         <div class="chips">${group("outsider") || `<span class="hint">Aucun</span>`}</div>
-        ${inPlay("drunk") ? `<p class="hint">Évitez le Villageois que croit être l'Ivrogne.</p>` : ""}
+        ${state.tokens.some((t) => t.roleId === "drunk" && !t.believes) ? `<p class="hint">Indiquez sur la fiche de l'Ivrogne le Villageois qu'il croit être, pour l'exclure des bluffs.</p>` : ""}
         <div class="bluff-actions">
           <button class="btn small" data-bluff-random>Tirer au hasard</button>
           <button class="btn small primary" data-bluff-show ${state.bluffs.length ? "" : "disabled"}>Montrer au Démon</button>
@@ -725,20 +751,35 @@
       </div>`;
   }
 
-  // ───────── Actions de nuit : échanges de personnages et rappels posés en un geste ─────────
+  // ───────── Actions de nuit : échanges, rappels et écrans à montrer en un geste ─────────
   const tokName = (t) => t.player || ROLES[t.roleId].name;
   const teamOf = (t) => ROLES[t.roleId].team;
-  let act = { key: null, picks: [], role: "" };
+  const defaultAlign = (roleId) => (TEAMS[ROLES[roleId].team].good === false ? "evil" : "good");
+  const alignOf = (t) => t.align || defaultAlign(t.roleId);
+  const ALIGN = { good: "Bon", evil: "Mauvais" };
+  // l'alignement n'est stocké que s'il diffère de celui du personnage
+  function setAlign(t, align) {
+    if (align === defaultAlign(t.roleId)) delete t.align;
+    else t.align = align;
+  }
+  let act = { key: null, picks: [], role: "", init: false };
   let undo = null; // dernière action, annulable tant qu'aucune autre étape n'est cochée
 
-  function changeRole(t, roleId) {
+  // Un changement de personnage garde l'alignement, sauf si on en donne un
+  function changeRole(t, roleId, align = alignOf(t)) {
     logEvent("role-change", { who: who(t), roleId });
     t.roleId = roleId;
+    delete t.believes;
+    setAlign(t, align);
     state.bluffs = state.bluffs.filter((id) => id !== roleId);
   }
-  function swapRoles(a, b) {
+  function swapRoles(a, b, swapAligns = false) {
     logEvent("role-swap", { a: who(a), b: who(b) });
+    const [alA, alB] = swapAligns ? [alignOf(b), alignOf(a)] : [alignOf(a), alignOf(b)];
     [a.roleId, b.roleId] = [b.roleId, a.roleId];
+    delete a.believes; delete b.believes;
+    setAlign(a, alA);
+    setAlign(b, alB);
   }
   function kill(t) {
     if (t.dead) return;
@@ -750,18 +791,189 @@
     if (!state.reminders.some((r) => r.tokenUid === t.uid && sameReminder(r, roleId, label))) toggleReminder(t, roleId, label);
   }
 
-  // pool : joueurs désignables ; roles : personnages proposés ; plan : effet décrit, et run pour l'appliquer
+  // Pages de l'écran plein écran : « Vous êtes… » après un changement de personnage
+  // l'alignement n'est affiché que s'il change ou s'il diffère de celui du personnage
+  const youAre = (t, roleId, align) => ({
+    caption: `Pour ${tokName(t)}`, title: "Vous êtes", roles: [roleId],
+    align: align ?? (alignOf(t) !== defaultAlign(roleId) ? alignOf(t) : undefined),
+  });
+  const others = (me) => state.tokens.filter((t) => t !== me);
+  const shuffle = (arr) => arr.map((x) => [Math.random(), x]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  // Étrangers en jeu pour le Parrain, triés par nom pour ne pas trahir les places
+  const outsidersInPlay = () => [...new Set(state.tokens.filter((t) => teamOf(t) === "outsider").map((t) => t.roleId))]
+    .sort((a, b) => ROLES[a].name.localeCompare(ROLES[b].name));
+
+  // Lavandière, Bibliothécaire, Enquêteur : le vrai joueur et le leurre, puis le jeton montré
+  const pairInfo = (team, label) => ({
+    prompt: "Le vrai joueur, puis le leurre",
+    count: 2,
+    labels: ["Vrai", "Leurre"],
+    pool: others,
+    rolePrompt: "Jeton montré",
+    roles: () => scriptRoles([team]),
+    roleDefault: (me, [a]) => (a && teamOf(a) === team ? a.roleId : ""),
+    plan(me, [a, b], role, rid) {
+      if (team === "outsider" && !a && !outsidersInPlay().length) return {
+        note: "Aucun Étranger en jeu : faites signe « zéro ».",
+        button: "Montrer « aucun Étranger »", stay: true,
+        show: [{ title: "Aucun Étranger n'est en jeu", roles: [] }],
+      };
+      return a && b && role && {
+        note: `Montrez ${role.name}, puis désignez ${tokName(a)} et ${tokName(b)}.`,
+        button: "Poser les rappels et montrer", stay: true,
+        run() { placeReminder(a, rid, label); placeReminder(b, rid, "Faux"); },
+        show: [{ title: "L'un de ces deux joueurs est", roles: [role.id] }],
+      };
+    },
+  });
+  // Montrer le personnage d'un joueur désigné (modifiable si l'information doit être fausse)
+  const revealOf = (prompt, title, pool = others, extra = {}) => ({
+    prompt, pool,
+    rolePrompt: "Jeton montré",
+    roles: () => scriptRoles(["townsfolk", "outsider", "minion", "demon"]),
+    roleDefault: (me, [t]) => t?.roleId || "",
+    plan: (me, [t], role, rid) => t && role && {
+      note: `Montrez ${role.name}${role.id !== t.roleId ? ` (au lieu de ${ROLES[t.roleId].name})` : ""}.`
+        + (rid === "grandmother" && alignOf(t) === "evil" ? ` ${tokName(t)} est Mauvais : seulement si la Grand-mère est ivre ou empoisonnée (ou si c'est l'Espion).` : ""),
+      button: "Montrer", stay: true,
+      run: extra.run && (() => extra.run(t, rid)),
+      show: [{ title, roles: [role.id] }],
+    },
+    ...extra.opts,
+  });
+
+  // pool : joueurs désignables ; roles : personnages proposés ; plan : effet décrit,
+  // run pour l'appliquer, show pour l'écran à montrer, stay pour rester sur l'étape
   const NIGHT_ACTIONS = {
+    washerwoman: pairInfo("townsfolk", "Villageois"),
+    librarian: pairInfo("outsider", "Étranger"),
+    investigator: pairInfo("minion", "Sbire"),
+    undertaker: revealOf("Joueur exécuté aujourd'hui", "Le joueur exécuté était", () => state.tokens.filter((t) => t.dead), {
+      opts: {
+        defaultPicks() {
+          const e = state.log.findLast((x) => x.type === "nomination" && x.executed && x.phase === state.phase - 1);
+          const t = e && (state.tokens.find((x) => x.player && x.player === e.target.player) || state.tokens.find((x) => x.roleId === e.target.roleId));
+          return t ? [t.uid] : [];
+        },
+      },
+    }),
+    ravenkeeper: revealOf("Joueur désigné", "Ce joueur est"),
+    harlot: revealOf("Joueur désigné (s'il accepte)", "Ce joueur est"),
+    // tous les joueurs sont proposés : une Grand-mère ivre ou empoisonnée peut recevoir un joueur Mauvais
+    grandmother: revealOf("Petit-enfant", "Votre petit-enfant est", others, {
+      run: (t, rid) => placeReminder(t, rid, "Petit-enfant"),
+    }),
+    dreamer: {
+      prompt: "Joueur désigné",
+      pool: others,
+      rolePrompt: "Autre jeton (alignement opposé)",
+      roles: (me, [t]) => t ? scriptRoles(["townsfolk", "outsider", "minion", "demon"]).filter((r) => defaultAlign(r.id) !== alignOf(t)) : [],
+      plan: (me, [t], role) => t && role && {
+        note: `Montrez ${ROLES[t.roleId].name} et ${role.name}, dans un ordre au hasard.`,
+        button: "Montrer", stay: true,
+        show: [{ title: "Ce joueur est l'un de ces personnages", roles: shuffle([t.roleId, role.id]) }],
+      },
+    },
+    eviltwin: {
+      prompt: "Le jumeau Bon",
+      pool: (me) => others(me).filter((t) => alignOf(t) === "good"),
+      plan: (me, [t]) => t && {
+        note: `Réveillez les deux jumeaux : chacun voit le personnage de l'autre.`,
+        button: "Poser « Jumeau » et montrer", stay: true,
+        run() { placeReminder(t, "eviltwin", "Jumeau"); },
+        show: [
+          { caption: `Pour ${tokName(me)}`, title: "Votre jumeau est", roles: [t.roleId] },
+          { caption: `Pour ${tokName(t)}`, title: "Votre jumeau est", roles: [me.roleId] },
+        ],
+      },
+    },
+    apprentice: {
+      rolePrompt: "Capacité gagnée",
+      roles: () => scriptRoles(["townsfolk", "minion"]),
+      plan: (me, picks, role) => role && {
+        note: `${tokName(me)} gagne la capacité : ${role.name}.`,
+        button: "Montrer", stay: true,
+        run() { placeReminder(me, "apprentice", "Est l'Apprenti"); },
+        show: [{ title: "Vous gagnez la capacité de", roles: [role.id] }],
+      },
+    },
+    exorcist: {
+      prompt: "Joueur désigné",
+      pool: (me) => others(me).filter((t) => !t.dead),
+      plan: (me, [t]) => t && (teamOf(t) === "demon"
+        ? {
+          note: `${tokName(t)} est le Démon : réveillez-le pour lui montrer l'Exorciste. Il ne se réveillera pas cette nuit.`,
+          button: "Poser « Choisi » et montrer au Démon", stay: true,
+          run() { placeReminder(t, "exorcist", "Choisi"); },
+          show: [{ title: "L'Exorciste vous a choisi", roles: ["exorcist"] }],
+        }
+        : { note: `${tokName(t)} n'est pas le Démon.`, button: "Poser « Choisi »", stay: true, run() { placeReminder(t, "exorcist", "Choisi"); } }),
+    },
+    cerenovus: {
+      prompt: "Joueur désigné",
+      pool: (me) => state.tokens.filter((t) => !t.dead),
+      rolePrompt: "Personnage Bon choisi",
+      roles: () => scriptRoles(["townsfolk", "outsider"]),
+      plan: (me, [t], role) => t && role && {
+        note: `Réveillez ${tokName(t)} : il doit être fou de ${role.name} demain.`,
+        button: "Poser « Fou » et montrer", stay: true,
+        run() { placeReminder(t, "cerenovus", "Fou"); },
+        show: [{ caption: `Pour ${tokName(t)}`, title: "Vous êtes fou de", roles: [role.id] }],
+      },
+    },
+    lunatic: {
+      when: () => isFirstNight(),
+      box: (me) => `
+        <p class="act-label">Faux Démon et faux bluffs</p>
+        <select class="act-role" data-lun="believes" aria-label="Démon qu'il croit être">
+          <option value="">Démon qu'il croit être…</option>
+          ${scriptRoles(["demon"]).map((r) => `<option value="${r.id}" ${me.believes === r.id ? "selected" : ""}>${escapeHtml(r.name)}</option>`).join("")}
+        </select>
+        ${[0, 1, 2].map((n) => `
+          <select class="act-role" data-lun="${n}" aria-label="Faux bluff ${n + 1}">
+            <option value="">Bluff ${n + 1}…</option>
+            ${bluffCandidates().map((r) => `<option value="${r.id}" ${state.lunaticBluffs[n] === r.id ? "selected" : ""}>${escapeHtml(r.name)}</option>`).join("")}
+          </select>`).join("")}`,
+      plan: () => state.lunaticBluffs.filter(Boolean).length > 0 && {
+        note: "Désignez de faux Sbires, puis montrez les bluffs.",
+        button: "Montrer les bluffs au Fou", stay: true,
+        show: [{ title: "Ces personnages ne sont pas en jeu", roles: state.lunaticBluffs.filter(Boolean) }],
+      },
+    },
+    godfather: {
+      when: () => isFirstNight(),
+      plan: () => {
+        const ids = outsidersInPlay();
+        return {
+          note: ids.length ? `${ids.length} Étranger${ids.length > 1 ? "s" : ""} en jeu.` : "Aucun Étranger en jeu.",
+          button: "Montrer au Parrain", stay: true,
+          show: [{ title: "Les Étrangers en jeu", roles: ids, empty: "Aucun Étranger n'est en jeu" }],
+        };
+      },
+    },
+    scarletwoman: {
+      when: (me) => !me.dead && state.tokens.some((t) => t.dead && teamOf(t) === "demon"),
+      plan(me) {
+        const demon = state.tokens.find((t) => t.dead && teamOf(t) === "demon");
+        return {
+          note: `Si le Démon est mort aujourd'hui avec 5 vivants ou plus, ${tokName(me)} devient ${ROLES[demon.roleId].name}.`,
+          button: "Changer et montrer",
+          run() { changeRole(me, demon.roleId); },
+          show: [youAre(me, demon.roleId)],
+        };
+      },
+    },
     snakecharmer: {
       prompt: "Joueur désigné",
-      pool: (me) => state.tokens.filter((t) => t !== me && !t.dead),
+      pool: (me) => others(me).filter((t) => !t.dead),
       plan(me, [t]) {
         if (!t) return null;
         if (teamOf(t) !== "demon") return { note: `${tokName(t)} n'est pas le Démon : rien ne change.` };
         return {
           note: `${tokName(t)} devient le Charmeur de serpents et est empoisonné ; ${tokName(me)} devient ${ROLES[t.roleId].name}.`,
           button: "Échanger et empoisonner",
-          run() { swapRoles(me, t); placeReminder(t, "snakecharmer", "Empoisonné"); },
+          run() { swapRoles(me, t, true); placeReminder(t, "snakecharmer", "Empoisonné"); },
+          show: [youAre(me, t.roleId, alignOf(t)), youAre(t, "snakecharmer", alignOf(me))],
         };
       },
     },
@@ -780,9 +992,10 @@
       rolePrompt: "Nouveau personnage (hors jeu)",
       roles: () => scriptRoles(["townsfolk", "outsider", "minion", "demon"]).filter((r) => !inPlay(r.id)),
       plan: (me, [t], role) => t && role && {
-        note: `${tokName(t)} devient ${role.name}.${role.team === "demon" ? " Un Démon est créé : les morts de cette nuit sont au choix du Conteur." : ""}`,
+        note: `${tokName(t)} devient ${role.name} et reste ${ALIGN[alignOf(t)]}.${role.team === "demon" ? " Un Démon est créé : les morts de cette nuit sont au choix du Conteur." : ""}`,
         button: "Transformer",
         run() { changeRole(t, role.id); },
+        show: [youAre(t, role.id)],
       },
     },
     barber: {
@@ -790,9 +1003,10 @@
       count: 2,
       pool: () => state.tokens.filter((t) => teamOf(t) !== "demon"),
       plan: (me, [a, b]) => b && {
-        note: `${tokName(a)} devient ${ROLES[b.roleId].name}, ${tokName(b)} devient ${ROLES[a.roleId].name}.`,
+        note: `${tokName(a)} devient ${ROLES[b.roleId].name}, ${tokName(b)} devient ${ROLES[a.roleId].name}. Les alignements ne changent pas.`,
         button: "Échanger leurs personnages",
         run() { swapRoles(a, b); },
+        show: [youAre(a, b.roleId), youAre(b, a.roleId)],
       },
     },
     imp: {
@@ -802,6 +1016,7 @@
         note: `${tokName(me)} meurt, ${tokName(t)} devient le Diablotin.`,
         button: "Passer le flambeau",
         run() { kill(me); changeRole(t, "imp"); },
+        show: [youAre(t, "imp")],
       },
     },
     fanggu: {
@@ -811,7 +1026,8 @@
       plan: (me, [t]) => t && {
         note: `${tokName(t)} devient le Fang Gu (Mauvais), ${tokName(me)} meurt à sa place.`,
         button: "Sauter sur l'Étranger",
-        run() { kill(me); changeRole(t, "fanggu"); placeReminder(t, "fanggu", "Une fois"); },
+        run() { kill(me); changeRole(t, "fanggu", "evil"); placeReminder(t, "fanggu", "Une fois"); },
+        show: [youAre(t, "fanggu", "evil")],
       },
     },
     philosopher: {
@@ -835,94 +1051,111 @@
 
   function actionPlan(step) {
     const a = NIGHT_ACTIONS[step.role.id];
-    if (!a || (a.when && !a.when(step.token))) return null;
-    if (act.key !== step.key) act = { key: step.key, picks: [], role: "" };
-    const pool = a.pool ? a.pool(step.token) : [];
+    const me = step.token;
+    if (!a || (a.when && !a.when(me))) return null;
+    if (act.key !== step.key) act = { key: step.key, picks: [], role: "", init: false };
+    if (!act.init) { act.picks = a.defaultPicks ? a.defaultPicks() : []; act.init = true; }
+    const pool = a.pool ? a.pool(me) : [];
     const picks = act.picks.map(tokenByUid).filter((t) => t && pool.includes(t));
-    return { a, pool, picks, plan: a.plan(step.token, picks, ROLES[act.role] || null) };
+    const roles = a.roles ? a.roles(me, picks) : [];
+    const roleId = act.role || (a.roleDefault ? a.roleDefault(me, picks) : "");
+    const role = roles.some((r) => r.id === roleId) ? ROLES[roleId] : null;
+    let plan = a.plan(me, picks, role, step.role.id) || null;
+    // l'Ivrogne agit comme le Villageois qu'il croit être : seuls les écrans et rappels restent
+    if (plan && me.roleId !== step.role.id && !plan.stay) plan = { note: `${tokName(me)} est l'${ROLES[me.roleId].name} : l'effet ne s'applique pas.` };
+    return { a, me, pool, picks, roles, role, plan };
   }
 
   function actionBox(step) {
     const p = actionPlan(step);
     if (!p) return "";
-    const { a, pool, picks, plan } = p;
-    const pickBtn = (t) => `
-      <button class="act-pick team-${teamOf(t)} ${picks.includes(t) ? "on" : ""} ${t.dead ? "dead" : ""}" data-act-pick="${t.uid}" aria-pressed="${picks.includes(t)}">
+    const { a, me, pool, picks, roles, role, plan } = p;
+    const pickBtn = (t) => {
+      const n = picks.indexOf(t);
+      return `
+      <button class="act-pick team-${teamOf(t)} ${n >= 0 ? "on" : ""} ${t.dead ? "dead" : ""}" data-act-pick="${t.uid}" aria-pressed="${n >= 0}">
         <span class="mini team-${teamOf(t)}">${monogram(ROLES[t.roleId].name)}</span>
         <span>${escapeHtml(tokName(t))}${t.player ? `<small>${escapeHtml(ROLES[t.roleId].name)}</small>` : ""}</span>
+        ${n >= 0 && a.labels ? `<b class="act-tag">${a.labels[n]}</b>` : ""}
       </button>`;
-    const roles = a.roles ? a.roles() : [];
+    };
     const groups = ["townsfolk", "outsider", "minion", "demon"].map((team) => {
       const rs = roles.filter((r) => r.team === team);
       return rs.length ? `<optgroup label="${TEAMS[team].plural}">${rs.map((r) =>
-        `<option value="${r.id}" ${r.id === act.role ? "selected" : ""}>${escapeHtml(r.name)}</option>`).join("")}</optgroup>` : "";
+        `<option value="${r.id}" ${r === role ? "selected" : ""}>${escapeHtml(r.name)}</option>`).join("")}</optgroup>` : "";
     }).join("");
     return `
       <div class="act">
+        ${me.roleId !== step.role.id ? `<p class="act-warn">${escapeHtml(tokName(me))} est en réalité l'${escapeHtml(ROLES[me.roleId].name)}.</p>` : ""}
+        ${a.box ? a.box(me) : ""}
         ${a.pool ? `
           <p class="act-label">${escapeHtml(a.prompt)}</p>
           <div class="act-picks">${pool.map(pickBtn).join("") || `<span class="hint">Aucun joueur possible.</span>`}</div>` : ""}
-        ${a.roles ? `
+        ${a.roles && roles.length ? `
           <label class="act-label">${escapeHtml(a.rolePrompt)}
             <select class="act-role" data-act-role><option value="">Choisir…</option>${groups}</select>
           </label>` : ""}
-        ${plan ? `<p class="act-note">${escapeHtml(plan.note)}</p>` : ""}
-        ${plan?.run ? `<button class="btn act-run" data-act-run>${escapeHtml(plan.button)}</button>` : ""}
+        ${plan?.note ? `<p class="act-note">${escapeHtml(plan.note)}</p>` : ""}
+        ${plan?.button && (plan.run || plan.show) ? `<button class="btn act-run" data-act-run>${escapeHtml(plan.button)}</button>` : ""}
       </div>`;
   }
 
-  // Applique l'action de l'étape en cours, puis passe à l'étape suivante
+  // Applique l'action de l'étape en cours, ouvre l'écran à montrer, puis passe à l'étape suivante
   function runAction() {
     const step = currentNightStep();
     const p = step?.token && actionPlan(step);
-    if (!p?.plan?.run) return;
-    const snap = JSON.stringify({ tokens: state.tokens, reminders: state.reminders, log: state.log, nightChecks: state.nightChecks, bluffs: state.bluffs });
-    const first = isFirstNight();
-    const order = first ? FIRST_NIGHT : OTHER_NIGHT;
-    const rank = order.indexOf(step.role.id);
-    toggleNightCheck(step.key);
-    p.plan.run();
-    // un joueur qui reçoit un rôle dont le tour est passé ne se réveille plus cette nuit
-    for (const i of nightItems(first)) {
-      if (!i.special && order.indexOf(i.role.id) <= rank && !state.nightChecks.includes(i.key)) state.nightChecks.push(i.key);
+    const plan = p?.plan;
+    if (!plan || !(plan.run || plan.show)) return;
+    if (plan.run) {
+      const snap = JSON.stringify({ tokens: state.tokens, reminders: state.reminders, log: state.log, nightChecks: state.nightChecks, bluffs: state.bluffs });
+      const first = isFirstNight();
+      const order = first ? FIRST_NIGHT : OTHER_NIGHT;
+      const rank = order.indexOf(step.role.id);
+      if (!plan.stay) toggleNightCheck(step.key);
+      plan.run();
+      // un joueur qui reçoit un rôle dont le tour est passé ne se réveille plus cette nuit
+      if (!plan.stay) for (const i of nightItems(first)) {
+        if (!i.special && order.indexOf(i.role.id) <= rank && !state.nightChecks.includes(i.key)) state.nightChecks.push(i.key);
+      }
+      undo = { label: `${step.role.name} : ${plan.button}`, snap };
+      if (!plan.stay) act = { key: null, picks: [], role: "", init: false };
+      commit();
     }
-    undo = { label: `${step.role.name} : ${p.plan.button}`, snap };
-    act = { key: null, picks: [], role: "" };
-    commit();
+    if (plan.show) openShow(plan.show);
   }
 
-  // Écran à montrer au Démon
+  // ───────── Écran plein écran à montrer aux joueurs (sans nom de joueur) ─────────
   const showDialog = $("#bluffShow");
-  function openBluffShow() {
-    openShow("Ces personnages ne sont pas en jeu", state.bluffs);
+  let showPages = [], showIndex = 0;
+  function openShow(pages) {
+    showPages = pages;
+    showIndex = 0;
+    renderShow();
+    if (!showDialog.open) showDialog.showModal();
   }
-  // Étrangers en jeu pour le Parrain : sans nom de joueur, triés par nom pour ne pas trahir les places
-  const outsidersInPlay = () => [...new Set(state.tokens.filter((t) => teamOf(t) === "outsider").map((t) => t.roleId))]
-    .sort((a, b) => ROLES[a].name.localeCompare(ROLES[b].name));
-  function godfatherBox() {
-    const n = outsidersInPlay().length;
-    return `
-      <div class="act">
-        <p class="act-note">${n ? `${n} Étranger${n > 1 ? "s" : ""} en jeu.` : "Aucun Étranger en jeu."}</p>
-        <button class="btn act-run" data-show-outsiders>Montrer au Parrain</button>
-      </div>`;
-  }
-  function openShow(title, roleIds, empty = "") {
+  function renderShow() {
+    const pg = showPages[showIndex];
+    const last = showIndex === showPages.length - 1;
     $("#bluffShowBody").innerHTML = `
-      <p class="show-title">${escapeHtml(title)}</p>
-      ${roleIds.length ? "" : `<p class="show-empty">${escapeHtml(empty)}</p>`}
+      ${pg.caption ? `<p class="show-caption">${escapeHtml(pg.caption)}</p>` : ""}
+      <p class="show-title">${escapeHtml(pg.title)}</p>
+      ${pg.roles.length ? "" : `<p class="show-empty">${escapeHtml(pg.empty || "")}</p>`}
       <div class="show-tokens">
-        ${roleIds.map((id) => {
+        ${pg.roles.map((id) => {
           const r = ROLES[id];
           return `<div class="show-role"><div class="show-token">${tokenHtml(r)}</div>
             <p class="show-name">${escapeHtml(r.name)}</p><p class="show-ability">${escapeHtml(r.ability)}</p></div>`;
         }).join("")}
       </div>
-      <button class="btn" data-show-close>Fermer</button>`;
-    showDialog.showModal();
+      ${pg.align ? `<p class="show-align ${pg.align}">Vous êtes ${ALIGN[pg.align]}</p>` : ""}
+      <button class="btn ${last ? "" : "primary"}" ${last ? "data-show-close" : "data-show-next"}>${last ? "Fermer" : "Suivant"}</button>`;
+  }
+  function openBluffShow() {
+    openShow([{ title: "Ces personnages ne sont pas en jeu", roles: state.bluffs }]);
   }
   showDialog.addEventListener("click", (e) => {
     if (e.target.closest("[data-show-close]")) showDialog.close();
+    if (e.target.closest("[data-show-next]")) { showIndex++; renderShow(); }
   });
 
   rail.addEventListener("click", (e) => {
@@ -936,12 +1169,14 @@
       commit();
     } else if (e.target.closest("[data-bluff-show]")) {
       openBluffShow();
-    } else if (e.target.closest("[data-show-outsiders]")) {
-      openShow("Les Étrangers en jeu", outsidersInPlay(), "Aucun Étranger n'est en jeu");
     } else if (e.target.closest("[data-act-pick]")) {
       const u = e.target.closest("[data-act-pick]").dataset.actPick;
-      const n = NIGHT_ACTIONS[currentNightStep()?.role?.id]?.count || 1;
-      act.picks = act.picks.includes(u) ? act.picks.filter((x) => x !== u) : [...act.picks, u].slice(-n);
+      const a = NIGHT_ACTIONS[currentNightStep()?.role?.id];
+      const n = a?.count || 1;
+      if (a?.roleDefault) act.role = ""; // le jeton montré suit le joueur désigné
+      if (act.picks.includes(u)) act.picks = act.picks.filter((x) => x !== u);
+      else if (act.picks.length < n) act.picks = [...act.picks, u];
+      else act.picks = [...act.picks.slice(0, n - 1), u];
       renderRail();
     } else if (e.target.closest("[data-act-run]")) {
       runAction();
@@ -963,9 +1198,20 @@
   });
 
   rail.addEventListener("change", (e) => {
-    if (!e.target.matches("[data-act-role]")) return;
-    act.role = e.target.value;
-    renderRail();
+    const lun = e.target.dataset.lun;
+    if (e.target.matches("[data-act-role]")) {
+      act.role = e.target.value;
+      renderRail();
+    } else if (lun === "believes") {
+      const t = currentNightStep()?.token;
+      if (t) t.believes = e.target.value || undefined;
+      commit();
+    } else if (lun) {
+      const list = [...state.lunaticBluffs];
+      list[Number(lun)] = e.target.value;
+      state.lunaticBluffs = list;
+      commit();
+    }
   });
 
   // ───────── Journal et récapitulatif ─────────
@@ -986,6 +1232,7 @@
       case "role-add": return `Entrée en jeu : ${escapeHtml(ROLES[e.roleId]?.name || "")}.`;
       case "role-remove": return `Sortie du jeu : ${escapeHtml(whoText(e.who))}.`;
       case "role-change": return `${escapeHtml(whoText(e.who))} devient <b>${escapeHtml(ROLES[e.roleId]?.name || "?")}</b>.`;
+      case "align": return `${escapeHtml(whoText(e.who))} devient <b>${ALIGN[e.align]}</b>.`;
       case "role-swap": return `${escapeHtml(whoText(e.a))} et ${escapeHtml(whoText(e.b))} échangent leurs personnages.`;
       case "nomination":
         return `<b>${escapeHtml(whoText(e.by))}</b> nomine <b>${escapeHtml(whoText(e.target))}</b>`
