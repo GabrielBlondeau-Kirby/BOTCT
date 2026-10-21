@@ -815,7 +815,7 @@
     const dead = new Map();
     for (const e of state.log) {
       if (e.phase !== phase) continue;
-      const w = e.type === "nomination" ? (e.executed ? e.target : null) : e.who;
+      const w = e.type === "nomination" ? (e.executed ? (e.virgin ? e.by : e.target) : null) : e.who;
       if (!w) continue;
       const k = w.player + "|" + w.roleId;
       if (e.type === "death" || e.type === "nomination") dead.set(k, w);
@@ -1613,7 +1613,10 @@
       case "nomination":
         return `<b>${escapeHtml(whoText(e.by))}</b> nomine <b>${escapeHtml(whoText(e.target))}</b>`
           + `${e.votes !== "" && e.votes != null ? ` : ${e.votes} vote${e.votes > 1 ? "s" : ""}` : ""}`
-          + `${e.executed ? ` → <b class="ev-death">exécuté</b>.` : e.onBlock ? " → sur le billot, gracié." : "."}`;
+          + (e.virgin ? ` → la Vierge : <b class="ev-death">${escapeHtml(whoText(e.by))} exécuté</b>.`
+            : e.executed ? ` → <b class="ev-death">exécuté</b>.`
+            : e.saved ? ` → exécuté mais survit (${escapeHtml(e.saved)}).`
+            : e.onBlock ? " → sur le billot, gracié." : ".");
       case "note": return `✎ ${escapeHtml(e.text)}`;
       case "end": return `<b>Fin de partie : victoire ${e.winner === "good" ? "du Bien" : "du Mal"}.</b>`;
       default: return escapeHtml(e.type);
@@ -1681,10 +1684,54 @@
       if (j.votes >= threshold && j.votes === best) { leader = -1; return "tie"; }
       return "low";
     });
+    const v = list.findIndex((j) => j.virgin);
+    if (v >= 0) { leader = v; status[v] = "lead"; }
     return { best, leader, status };
   }
   const tokenName = (t) => t.player || ROLES[t.roleId].name;
-  const fateOf = (j, i, leader) => (j.fate === null || j.fate === undefined ? i === leader : j.fate);
+  // Le joueur exécuté : le nominé, ou le nominateur si la Vierge l'a démasqué
+  const victimOf = (j) => tokenByUid(j.virgin ? j.by : j.target);
+  // Par défaut, le joueur sur le billot meurt, sauf si quelque chose l'en protège
+  const fateOf = (j, i, leader) => (j.fate === null || j.fate === undefined ? i === leader && !executionInfo(victimOf(j)).saved : j.fate);
+
+  // Ce que déclenche une nomination : Vierge (1re nomination par un Villageois), Sorcière (nominateur maudit)
+  function nominationEffects(by, target) {
+    const fx = { notes: [] };
+    if (target.roleId === "virgin" && !hasReminder(target, "virgin", "Sans pouvoir")) {
+      if (teamOf(by) === "townsfolk") {
+        fx.virgin = true;
+        fx.notes.push(`Vierge : ${tokenName(by)} est un Villageois, il est exécuté immédiatement et la journée se termine.`);
+      } else fx.notes.push(`Vierge : ${tokenName(by)} n'est pas un Villageois${by.roleId === "spy" ? " (l'Espion peut pourtant être perçu comme tel)" : ""}. Elle perd sa capacité.`);
+      if (state.reminders.some((r) => r.tokenUid === target.uid && /^(Empoisonné|Ivre)/.test(r.label))) fx.notes.push("La Vierge est ivre ou empoisonnée : sa capacité peut ne pas fonctionner.");
+    }
+    if (hasReminder(by, "witch", "Maudit") && state.tokens.some((t) => t.roleId === "witch" && !t.dead)) {
+      fx.cursed = true;
+      fx.notes.push(`${tokenName(by)} est maudit par la Sorcière : il meurt en nominant.`);
+    }
+    return fx;
+  }
+  // Ce qui change l'issue d'une exécution (saved : raison pour laquelle il ne meurt pas) et ce qu'elle déclenche
+  function executionInfo(t) {
+    const info = { saved: null, notes: [] };
+    if (!t) return info;
+    const tea = state.tokens.find((x) => x.roleId === "tealady" && !x.dead);
+    if (hasReminder(t, "devilsadvocate", "Survit à l'exécution")) info.saved = "Avocat du diable";
+    else if (t.roleId === "fool" && !hasReminder(t, "fool", "Sans pouvoir")) info.saved = "Bouffon, 1re mort évitée";
+    else if (t.roleId === "sailor") info.saved = "Marin, s'il est sobre";
+    else if (tea && tea !== t && aliveNeighbours(tea).includes(t) && aliveNeighbours(tea).every((x) => alignOf(x) === "good")) info.saved = "voisin de la Dame du thé";
+    if (t.roleId === "zombuul" && !hasReminder(t, "zombuul", "Mort")) info.notes.push("Zombuul : la 1re fois, il paraît mort mais vit encore.");
+    if (t.roleId === "saint") info.notes.push("Si la Sainte meurt exécutée, le Mal gagne.");
+    if (hasReminder(t, "eviltwin", "Jumeau")) info.notes.push("Si le jumeau Bon est exécuté, le Mal gagne.");
+    if (teamOf(t) === "demon") {
+      const sw = state.tokens.some((x) => x.roleId === "scarletwoman" && !x.dead);
+      const alive = state.tokens.filter((x) => !x.dead && teamOf(x) !== "traveller").length;
+      info.notes.push(sw && alive >= 5 ? "Démon exécuté : la Femme écarlate devient le Démon." : "Démon exécuté : le Bien gagne s'il n'y a plus de Démon.");
+      if (state.tokens.some((x) => x.roleId === "mastermind" && !x.dead)) info.notes.push("Cerveau : un jour de plus est joué.");
+    }
+    if (alignOf(t) === "good" && state.tokens.some((x) => x.roleId === "pacifist" && !x.dead)) info.notes.push("Pacifiste : ce joueur Bon peut survivre.");
+    if (["moonchild", "klutz"].includes(t.roleId)) info.notes.push("Il choisit un joueur en apprenant sa mort.");
+    return info;
+  }
 
   function trialHtml() {
     const tr = currentTrial();
@@ -1698,7 +1745,8 @@
     if (d.by && (!tokenByUid(d.by) || nominators.includes(d.by))) d.by = null;
     if (d.target && (!tokenByUid(d.target) || nominated.includes(d.target))) d.target = null;
     d.votes = Math.min(d.votes, maxVotes);
-    const leaderTok = leader >= 0 ? tokenByUid(tr.list[leader].target) : null;
+    const leaderTok = leader >= 0 ? victimOf(tr.list[leader]) : null;
+    const byVirgin = leader >= 0 && tr.list[leader].virgin;
 
     const player = (t, kind, on, off, note) => `
       <button class="tr-player ${kind} ${on ? "on" : ""}" data-tr-${kind}="${t.uid}" aria-pressed="${on}" ${off ? "disabled" : ""}>
@@ -1721,15 +1769,19 @@
       else if (d.votes > best) { verdict = `${tName} passerait sur le billot.`; vClass = "lead"; }
       else if (d.votes === best) { verdict = `Égalité à ${best} votes : plus personne sur le billot.`; vClass = "tie"; }
       else verdict = `Pas assez pour battre ${best} votes.`;
+      const fx = nominationEffects(tokenByUid(d.by), tokenByUid(d.target));
+      if (fx.notes.length) { verdict = fx.notes.map(escapeHtml).join("<br>"); vClass = "special"; }
     }
     const segments = Array.from({ length: maxVotes }, (_, i) =>
       `<i class="${i < d.votes ? (d.votes >= threshold ? "on" : "low") : ""} ${i === threshold - 1 ? "mark" : ""}"></i>`).join("");
 
     const cards = tr.list.map((j, i) => ({ j, i })).sort((a, b) => b.j.votes - a.j.votes || a.i - b.i).map(({ j, i }) => {
       const s = status[i], isLeader = i === leader;
-      const chip = s === "lead" ? (isLeader ? "Sur le billot" : "Dépassé") : s === "tie" ? "Égalité" : "Insuffisant";
+      const chip = j.virgin ? "Vierge" : s === "lead" ? (isLeader ? "Sur le billot" : "Dépassé") : s === "tie" ? "Égalité" : "Insuffisant";
       const dies = fateOf(j, i, leader);
       const by = tokenByUid(j.by), target = tokenByUid(j.target);
+      const ex = isLeader || dies ? executionInfo(victimOf(j)) : { notes: [] };
+      const cardNotes = [j.virgin && `${tokenName(by)} est exécuté par la Vierge.`, ex.saved && `Ne meurt pas : ${ex.saved}.`, ...ex.notes].filter(Boolean);
       return `
         <div class="tr-card ${isLeader ? "leader" : ""}">
           <span class="tr-card-n">#${i + 1}</span>
@@ -1742,9 +1794,10 @@
                  <button class="${dies ? "" : "on lives"}" data-tr-fate="${i}" data-dies="0" aria-pressed="${!dies}">Survit</button>
                </span>`
             : `<span class="tr-chip ${isLeader ? "lead" : s === "lead" ? "passed" : s}">${chip}</span>`}
+          ${tr.mode !== "vote" && cardNotes.length ? `<small class="tr-card-note">${cardNotes.map(escapeHtml).join("<br>")}</small>` : ""}
         </div>`;
     }).join("");
-    const deaths = tr.list.filter((j, i) => fateOf(j, i, leader)).map((j) => tokenName(tokenByUid(j.target)));
+    const deaths = tr.list.filter((j, i) => fateOf(j, i, leader)).map((j) => tokenName(victimOf(j)));
     const names = (l) => l.map(escapeHtml).join(", ");
 
     let footer;
@@ -1752,7 +1805,7 @@
       <span class="tr-foot-hint">Une fois les nominations terminées, passez au verdict.</span>
       <button class="btn primary" data-tr-mode="verdict" ${tr.list.length ? "" : "disabled"}>Plus de jugement</button>`;
     else if (tr.mode === "verdict") footer = `
-      <span class="tr-foot-hint">${deaths.length ? `Mort${deaths.length > 1 ? "s" : ""} : ${names(deaths)}` : "Aucune mort ce jour"}</span>
+      <span class="tr-foot-hint">${deaths.length ? `Exécuté${deaths.length > 1 ? "s" : ""} : ${names(deaths)}` : "Aucune exécution ce jour"}</span>
       <button class="btn" data-tr-mode="vote">Reprendre les nominations</button>
       <button class="btn primary" data-tr-validate>${deaths.length ? `Valider : ${names(deaths)} ${deaths.length > 1 ? "meurent" : "meurt"}` : "Valider : personne ne meurt"}</button>`;
     else footer = `
@@ -1768,7 +1821,7 @@
         </div>
         <div class="tr-block ${leaderTok ? "has" : ""}">
           <span>Sur le billot</span>
-          <b>${leaderTok ? `${escapeHtml(tokenName(leaderTok))} · ${best} votes` : best ? "Personne (égalité)" : "Personne"}</b>
+          <b>${leaderTok ? `${escapeHtml(tokenName(leaderTok))} · ${byVirgin ? "par la Vierge" : `${best} votes`}` : best ? "Personne (égalité)" : "Personne"}</b>
         </div>
         <button class="icon-btn" data-tr-close aria-label="Fermer">✕</button>
       </header>
@@ -1788,7 +1841,7 @@
           <div class="tr-gauge" aria-hidden="true">${segments}</div>
           <p class="tr-gauge-hint">Seuil ${threshold} · à battre ${best ? best + 1 : threshold} · maximum ${maxVotes}</p>
           <p class="tr-verdict ${vClass}">${verdict}</p>
-          <button class="btn primary tr-record" data-tr-record ${ready ? "" : "disabled"}>Enregistrer le jugement</button>
+          <button class="btn primary tr-record" data-tr-record ${ready ? "" : "disabled"}>${ready && nominationEffects(tokenByUid(d.by), tokenByUid(d.target)).virgin ? "Exécuter le nominateur" : "Enregistrer le jugement"}</button>
         </section>
         <section class="tr-col">
           <h3 class="target">Nominé</h3>
@@ -1831,9 +1884,14 @@
     else if ((b = btn("[data-tr-votes]"))) trialDraft.votes = Math.max(0, trialDraft.votes + Number(b.dataset.trVotes));
     else if (btn("[data-tr-record]")) {
       if (!trialDraft.by || !trialDraft.target) return;
-      tr.list.push({ by: trialDraft.by, target: trialDraft.target, votes: trialDraft.votes, fate: null });
+      const by = tokenByUid(trialDraft.by), target = tokenByUid(trialDraft.target);
+      const fx = nominationEffects(by, target);
+      const j = { by: by.uid, target: target.uid, votes: fx.virgin ? 0 : trialDraft.votes, fate: null };
+      if (fx.cursed) kill(by);
+      if (target.roleId === "virgin" && !hasReminder(target, "virgin", "Sans pouvoir")) placeReminder(target, "virgin", "Sans pouvoir");
+      if (fx.virgin) { j.virgin = true; tr.mode = "verdict"; } // l'exécution par la Vierge clôt la journée
+      tr.list.push(j);
       trialDraft = { by: null, target: null, votes: 0 };
-    undo = null;
     } else if ((b = btn("[data-tr-del]"))) tr.list.splice(Number(b.dataset.trDel), 1);
     else if ((b = btn("[data-tr-mode]"))) tr.mode = b.dataset.trMode;
     else if ((b = btn("[data-tr-fate]"))) tr.list[Number(b.dataset.trFate)].fate = b.dataset.dies === "1";
@@ -1842,10 +1900,16 @@
       const { leader } = standings(tr.list, Math.ceil(alive / 2));
       const dead = [];
       tr.list.forEach((j, i) => {
-        const by = tokenByUid(j.by), target = tokenByUid(j.target);
+        const by = tokenByUid(j.by), target = tokenByUid(j.target), victim = victimOf(j);
         const executed = fateOf(j, i, leader);
-        logEvent("nomination", { by: who(by), target: who(target), votes: j.votes, executed, onBlock: i === leader });
-        if (executed) { target.dead = true; dead.push(tokenName(target)); }
+        const { saved } = executionInfo(victim);
+        logEvent("nomination", { by: who(by), target: who(target), votes: j.votes, executed, onBlock: i === leader,
+          virgin: !!j.virgin, saved: i === leader && !executed ? saved : null });
+        if (i === leader && !executed && victim.roleId === "fool") placeReminder(victim, "fool", "Sans pouvoir");
+        if (!executed) return;
+        if (victim.roleId === "zombuul" && !hasReminder(victim, "zombuul", "Mort")) placeReminder(victim, "zombuul", "Mort");
+        victim.dead = true;
+        dead.push(tokenName(victim));
       });
       tr.mode = "done";
       tr.result = dead.length
