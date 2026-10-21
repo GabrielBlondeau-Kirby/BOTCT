@@ -25,6 +25,7 @@
     <nav class="actions">
       <button class="btn" data-panel="roles">Rôles <span class="pill" id="roleCount">0</span></button>
       <button class="btn" data-panel="night">Ordre de nuit</button>
+      <button class="btn" data-panel="journal">Journal</button>
       <button class="btn" data-panel="rules">Règles</button>
       <span class="sep" aria-hidden="true"></span>
       <button class="btn ghost" id="arrangeBtn" title="Disposer les jetons en cercle">Cercle</button>
@@ -37,7 +38,136 @@
   </header>
 
   <div class="stage">
+  <aside class="night-rail" id="nightRail" aria-label="Suivi des réveils" hidden></aside>
   <main class="board" id="board">
+    <div class="scene" aria-hidden="true">
+      <div class="sky sky-night"></div>
+      <div class="sky sky-day"></div>
+      <div class="stars" id="stars"></div>
+      <div class="sunbeams"></div>
+      <div class="moon"><span></span></div>
+      <div class="sun"><span></span></div>
+      <div class="decor decor-tl">
+        <div class="candle-glow"></div>
+        <svg class="candles" viewBox="0 0 150 130" aria-hidden="true">
+          <defs>
+            <linearGradient id="wax" x1="0" x2="1">
+              <stop offset="0" stop-color="#c9b48c"/><stop offset="0.45" stop-color="#f3e8cc"/><stop offset="1" stop-color="#b39a6e"/>
+            </linearGradient>
+            <radialGradient id="flame" cx="0.5" cy="0.75" r="0.6">
+              <stop offset="0" stop-color="#fffbe6"/><stop offset="0.35" stop-color="#ffd76a"/><stop offset="0.8" stop-color="#ff9a2e"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <ellipse cx="75" cy="124" rx="68" ry="6" fill="#000" opacity="0.35"/>
+          <g class="candle c1">
+            <rect x="22" y="58" width="22" height="66" rx="3" fill="url(#wax)"/>
+            <path d="M22 62q4 10 7 2t8 6q3 4 7-6v-4H22Z" fill="#f7efd9"/>
+            <line x1="33" y1="58" x2="33" y2="51" stroke="#2a2118" stroke-width="1.6"/>
+            <path class="flame" d="M33 28c6 9 8 16 0 24c-8-8-6-15 0-24Z" fill="url(#flame)"/>
+          </g>
+          <g class="candle c2">
+            <rect x="60" y="30" width="28" height="94" rx="3" fill="url(#wax)"/>
+            <path d="M60 34q5 14 9 3t10 8q4 5 9-8v-3H60Z" fill="#f7efd9"/>
+            <line x1="74" y1="30" x2="74" y2="22" stroke="#2a2118" stroke-width="1.8"/>
+            <path class="flame" d="M74-4c7 10 10 18 0 27c-10-9-7-17 0-27Z" fill="url(#flame)"/>
+          </g>
+          <g class="candle c3">
+            <rect x="104" y="72" width="20" height="52" rx="3" fill="url(#wax)"/>
+            <path d="M104 76q4 8 6 1t7 5q3 3 7-5v-1h-20Z" fill="#f7efd9"/>
+            <line x1="114" y1="72" x2="114" y2="66" stroke="#2a2118" stroke-width="1.5"/>
+            <path class="flame" d="M114 44c6 8 7 15 0 22c-7-7-6-14 0-22Z" fill="url(#flame)"/>
+          </g>
+        </svg>
+        <svg class="plant" viewBox="0 0 150 150" aria-hidden="true">
+          <ellipse cx="75" cy="145" rx="52" ry="5" fill="#3b2a12" opacity="0.25"/>
+          <g class="sway s1">
+            <path d="M75 112C70 80 52 62 34 50" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M52 66c-14-2-22-10-24-20c12 0 22 8 24 20Z" fill="#6c9d4c"/>
+            <g class="flower" transform="translate(34 48)">
+              <circle r="7" cy="-7" fill="#f4a6b8"/><circle r="7" cx="7" cy="-1" fill="#f4a6b8"/><circle r="7" cx="4" cy="7" fill="#f4a6b8"/><circle r="7" cx="-5" cy="6" fill="#f4a6b8"/><circle r="7" cx="-7" cy="-2" fill="#f4a6b8"/><circle r="4.5" fill="#f7d35a"/>
+            </g>
+          </g>
+          <g class="sway s2">
+            <path d="M75 112C78 76 86 50 98 28" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M84 62c12-6 24-4 30 4c-12 6-24 4-30-4Z" fill="#7fae57"/>
+            <path d="M80 82c-12-8-14-18-10-26c10 6 14 16 10 26Z" fill="#5d8f43"/>
+            <g class="flower" transform="translate(98 26)">
+              <circle r="8" cy="-8" fill="#fff4d6"/><circle r="8" cx="8" cy="-1" fill="#fff4d6"/><circle r="8" cx="5" cy="8" fill="#fff4d6"/><circle r="8" cx="-5" cy="7" fill="#fff4d6"/><circle r="8" cx="-8" cy="-2" fill="#fff4d6"/><circle r="5" fill="#f2b43b"/>
+            </g>
+          </g>
+          <g class="sway s3">
+            <path d="M75 112C88 92 104 84 122 80" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M104 86c4 10 0 20-8 24c-2-10 2-20 8-24Z" fill="#6c9d4c"/>
+            <g class="flower" transform="translate(122 78)">
+              <circle r="6" cy="-6" fill="#c9a4f0"/><circle r="6" cx="6" cy="-1" fill="#c9a4f0"/><circle r="6" cx="4" cy="6" fill="#c9a4f0"/><circle r="6" cx="-4" cy="5" fill="#c9a4f0"/><circle r="6" cx="-6" cy="-2" fill="#c9a4f0"/><circle r="3.8" fill="#f7d35a"/>
+            </g>
+          </g>
+          <path d="M46 108h58l-8 38H54Z" fill="#5f7f9a"/>
+          <path d="M42 104h66v9H42Z" fill="#7697b2"/>
+          <path d="M54 124h42" stroke="#86a6c0" stroke-width="2" opacity="0.6"/>
+        </svg>
+      </div>
+      <div class="decor decor-br">
+        <div class="candle-glow"></div>
+        <svg class="candles" viewBox="0 0 150 130" aria-hidden="true">
+          <defs>
+            <linearGradient id="wax" x1="0" x2="1">
+              <stop offset="0" stop-color="#c9b48c"/><stop offset="0.45" stop-color="#f3e8cc"/><stop offset="1" stop-color="#b39a6e"/>
+            </linearGradient>
+            <radialGradient id="flame" cx="0.5" cy="0.75" r="0.6">
+              <stop offset="0" stop-color="#fffbe6"/><stop offset="0.35" stop-color="#ffd76a"/><stop offset="0.8" stop-color="#ff9a2e"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <ellipse cx="75" cy="124" rx="68" ry="6" fill="#000" opacity="0.35"/>
+          <g class="candle c1">
+            <rect x="22" y="58" width="22" height="66" rx="3" fill="url(#wax)"/>
+            <path d="M22 62q4 10 7 2t8 6q3 4 7-6v-4H22Z" fill="#f7efd9"/>
+            <line x1="33" y1="58" x2="33" y2="51" stroke="#2a2118" stroke-width="1.6"/>
+            <path class="flame" d="M33 28c6 9 8 16 0 24c-8-8-6-15 0-24Z" fill="url(#flame)"/>
+          </g>
+          <g class="candle c2">
+            <rect x="60" y="30" width="28" height="94" rx="3" fill="url(#wax)"/>
+            <path d="M60 34q5 14 9 3t10 8q4 5 9-8v-3H60Z" fill="#f7efd9"/>
+            <line x1="74" y1="30" x2="74" y2="22" stroke="#2a2118" stroke-width="1.8"/>
+            <path class="flame" d="M74-4c7 10 10 18 0 27c-10-9-7-17 0-27Z" fill="url(#flame)"/>
+          </g>
+          <g class="candle c3">
+            <rect x="104" y="72" width="20" height="52" rx="3" fill="url(#wax)"/>
+            <path d="M104 76q4 8 6 1t7 5q3 3 7-5v-1h-20Z" fill="#f7efd9"/>
+            <line x1="114" y1="72" x2="114" y2="66" stroke="#2a2118" stroke-width="1.5"/>
+            <path class="flame" d="M114 44c6 8 7 15 0 22c-7-7-6-14 0-22Z" fill="url(#flame)"/>
+          </g>
+        </svg>
+        <svg class="plant" viewBox="0 0 150 150" aria-hidden="true">
+          <ellipse cx="75" cy="145" rx="52" ry="5" fill="#3b2a12" opacity="0.25"/>
+          <g class="sway s1">
+            <path d="M75 112C70 80 52 62 34 50" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M52 66c-14-2-22-10-24-20c12 0 22 8 24 20Z" fill="#6c9d4c"/>
+            <g class="flower" transform="translate(34 48)">
+              <circle r="7" cy="-7" fill="#f4a6b8"/><circle r="7" cx="7" cy="-1" fill="#f4a6b8"/><circle r="7" cx="4" cy="7" fill="#f4a6b8"/><circle r="7" cx="-5" cy="6" fill="#f4a6b8"/><circle r="7" cx="-7" cy="-2" fill="#f4a6b8"/><circle r="4.5" fill="#f7d35a"/>
+            </g>
+          </g>
+          <g class="sway s2">
+            <path d="M75 112C78 76 86 50 98 28" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M84 62c12-6 24-4 30 4c-12 6-24 4-30-4Z" fill="#7fae57"/>
+            <path d="M80 82c-12-8-14-18-10-26c10 6 14 16 10 26Z" fill="#5d8f43"/>
+            <g class="flower" transform="translate(98 26)">
+              <circle r="8" cy="-8" fill="#fff4d6"/><circle r="8" cx="8" cy="-1" fill="#fff4d6"/><circle r="8" cx="5" cy="8" fill="#fff4d6"/><circle r="8" cx="-5" cy="7" fill="#fff4d6"/><circle r="8" cx="-8" cy="-2" fill="#fff4d6"/><circle r="5" fill="#f2b43b"/>
+            </g>
+          </g>
+          <g class="sway s3">
+            <path d="M75 112C88 92 104 84 122 80" stroke="#4f7a3a" stroke-width="3" fill="none"/>
+            <path d="M104 86c4 10 0 20-8 24c-2-10 2-20 8-24Z" fill="#6c9d4c"/>
+            <g class="flower" transform="translate(122 78)">
+              <circle r="6" cy="-6" fill="#c9a4f0"/><circle r="6" cx="6" cy="-1" fill="#c9a4f0"/><circle r="6" cx="4" cy="6" fill="#c9a4f0"/><circle r="6" cx="-4" cy="5" fill="#c9a4f0"/><circle r="6" cx="-6" cy="-2" fill="#c9a4f0"/><circle r="3.8" fill="#f7d35a"/>
+            </g>
+          </g>
+          <path d="M46 108h58l-8 38H54Z" fill="#5f7f9a"/>
+          <path d="M42 104h66v9H42Z" fill="#7697b2"/>
+          <path d="M54 124h42" stroke="#86a6c0" stroke-width="2" opacity="0.6"/>
+        </svg>
+      </div>
+    </div>
     <div class="board-empty" id="boardEmpty">
       <p class="empty-title">Le Grimoire est vide</p>
       <p>Ouvrez <b>Rôles</b> pour choisir les personnages en jeu, puis déplacez librement leurs jetons.</p>
@@ -57,6 +187,14 @@
 
   <dialog class="sheet" id="roleSheet">
     <div class="sheet-inner" id="sheetBody"></div>
+  </dialog>
+
+  <dialog class="bluff-show" id="bluffShow" aria-label="Bluffs du Démon">
+    <div class="bluff-show-inner" id="bluffShowBody"></div>
+  </dialog>
+
+  <dialog class="recap" id="recap" aria-label="Récapitulatif de partie">
+    <div class="recap-inner" id="recapBody"></div>
   </dialog>
 
   <script src="js/roles.js"></script>
