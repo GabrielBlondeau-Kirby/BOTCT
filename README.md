@@ -30,3 +30,7 @@ Une app web simple pour gérer une partie de *Blood on the Clocktower* quand on 
 - **Sauvegarde automatique** dans le navigateur. « Nouvelle partie » remet le Grimoire à zéro.
 
 Les capacités sont des traductions libres des textes officiels.
+
+## Versions
+
+Les releases sont numérotées `JJ.MM.AAAA-X-0` : la date du jour (heure de Paris), puis `X`, le numéro de la release dans la journée (à partir de 1), et un `0` fixe. Pour en publier une : onglet **Actions** → **Release** → **Run workflow**. Le numéro est calculé automatiquement et les notes listent les pull requests fusionnées depuis la release précédente.
