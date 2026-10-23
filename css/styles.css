@@ -1236,3 +1236,21 @@ body.is-day .night-only, body:not(.is-day) .day-only { display: none; }
   .tr-card { width: 150px; height: 170px; }
   .tr-cards, .tr-history-head { padding-left: 16px; padding-right: 16px; }
 }
+
+/* ───────── Grimoire montré à l'Espion ───────── */
+.spy-view-close { display: none; }
+body.spy-view .topbar,
+body.spy-view .night-rail,
+body.spy-view .panel,
+body.spy-view .player-tag,
+body.spy-view .rem-del { display: none !important; }
+body.spy-view .board { pointer-events: none; }
+body.spy-view .token.waking .token-face { animation: none; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5), inset 0 0 0 calc(var(--token) * 0.05) var(--team), inset 0 0 0 calc(var(--token) * 0.065) rgba(0, 0, 0, 0.25); }
+body.spy-view .spy-view-close {
+  display: block;
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 16px;
+  z-index: 20;
+  pointer-events: auto;
+}
