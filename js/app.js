@@ -38,6 +38,7 @@
     ended: null,     // { winner: "good" | "evil", phase }
     trial: null,     // jugements du jour en cours : { phase, mode, list: [{ by, target, votes, fate }] }
     roster: [],      // prénoms des joueurs, dans l'ordre autour de la table (conservés entre les parties)
+    locked: false,   // plateau figé : les jetons ne se déplacent plus, la vue peut tourner
   });
 
   let state = load();
@@ -172,7 +173,8 @@
     for (const t of state.tokens) {
       const mine = state.reminders.filter((r) => r.tokenUid === t.uid);
       if (!mine.length) continue;
-      const cx = (t.x / 100) * w, cy = (t.y / 100) * h;
+      const v = viewPos(t);
+      const cx = (v.x / 100) * w, cy = (v.y / 100) * h;
       const base = Math.atan2(0.51 * h - cy, 0.5 * w - cx);
       let i = 0, ring = 0;
       while (i < mine.length) {
@@ -232,8 +234,9 @@
       const el = document.createElement("div");
       el.className = "token" + (t.dead ? " is-dead" : "") + (waking && waking.token === t ? " waking" : "");
       el.dataset.uid = t.uid;
-      el.style.left = t.x + "%";
-      el.style.top = t.y + "%";
+      const v = viewPos(t);
+      el.style.left = v.x + "%";
+      el.style.top = v.y + "%";
       el.innerHTML = tokenHtml(role) +
         (t.dead ? `<span class="shroud" title="${t.ghostUsed ? "Vote fantôme utilisé" : "Vote fantôme disponible"}">${t.ghostUsed ? "" : "<i></i>"}</span>` : "") +
         (t.align ? `<span class="align-badge ${t.align}" title="Alignement changé">${ALIGN[t.align]}</span>` : "") +
@@ -253,6 +256,14 @@
     }
     board.appendChild(frag);
     placeReminders();
+    markFacing();
+    $("#boardCtl").innerHTML = state.locked
+      ? `<button class="btn small" data-spin="1" aria-label="Tourner vers la gauche" title="Joueur précédent">⟲</button>
+         <button class="btn small ${compass ? "on" : ""}" data-compass aria-pressed="${!!compass}" title="Suivre le gyroscope">🧭<span class="ctl-label"> Boussole</span></button>
+         <button class="btn small" data-spin="-1" aria-label="Tourner vers la droite" title="Joueur suivant">⟳</button>
+         <button class="btn small on" data-lock aria-pressed="true" title="Débloquer le plateau">🔒<span class="ctl-label"> Figé</span></button>`
+      : `<button class="btn small" data-lock aria-pressed="false" title="Bloquer les jetons pour pouvoir tourner la vue">🔓<span class="ctl-label"> Figer</span></button>`;
+    board.classList.toggle("locked", state.locked);
 
     const alive = state.tokens.filter((t) => !t.dead && ROLES[t.roleId].team !== "traveller").length;
     const total = state.tokens.filter((t) => ROLES[t.roleId].team !== "traveller").length;
@@ -262,12 +273,118 @@
       : "";
   }
 
+  // ───────── Plateau figé : vue tournante (flèches ou gyroscope) ─────────
+  // La rotation ne touche que l'affichage : les positions enregistrées restent celles du plateau
+  let spin = 0, spinTarget = 0, spinRaf = 0, compass = null, ctlMsgTimer = null;
+  function viewPos(t) {
+    if (!spin) return { x: t.x, y: t.y };
+    const u = (t.x - 50) / 38, v = (t.y - 51) / 36;
+    const r = Math.hypot(u, v), a = Math.atan2(v, u) + spin;
+    return { x: 50 + 38 * r * Math.cos(a), y: 51 + 36 * r * Math.sin(a) };
+  }
+  const seatAngle = (t) => Math.atan2((t.y - 51) / 36, (t.x - 50) / 38);
+  const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+  // Le jeton affiché en haut est celui qui est « en face »
+  function facingToken(at = spin) {
+    let best = null, bestD = Infinity;
+    for (const t of state.tokens) {
+      const d = Math.abs(angleDiff(seatAngle(t) + at, -Math.PI / 2));
+      if (d < bestD) { best = t; bestD = d; }
+    }
+    return best;
+  }
+  function markFacing() {
+    const f = state.locked && facingToken();
+    board.querySelectorAll(".token").forEach((el) => el.classList.toggle("facing", !!f && el.dataset.uid === f.uid));
+  }
+  function applySpin() {
+    board.querySelectorAll(".token").forEach((el) => {
+      const t = tokenByUid(el.dataset.uid);
+      if (!t) return;
+      const v = viewPos(t);
+      el.style.left = v.x + "%";
+      el.style.top = v.y + "%";
+    });
+    placeReminders();
+    markFacing();
+  }
+  function setSpin(target) {
+    spinTarget = target;
+    if (!spinRaf) spinRaf = requestAnimationFrame(stepSpin);
+  }
+  function stepSpin() {
+    const d = angleDiff(spinTarget, spin);
+    if (Math.abs(d) < 0.002) { spin = spinTarget; spinRaf = 0; }
+    else { spin += d * 0.25; spinRaf = requestAnimationFrame(stepSpin); }
+    applySpin();
+  }
+  // Une place vers la gauche (+1) ou la droite (-1), calée sur le jeton suivant
+  function spinSeat(dir) {
+    const n = state.tokens.length;
+    if (!n) return;
+    const now = facingToken(spinTarget);
+    const ring = [...state.tokens].sort((a, b) => seatAngle(a) - seatAngle(b));
+    const next = ring[(ring.indexOf(now) - dir + n) % n];
+    const target = spinTarget + angleDiff(-Math.PI / 2 - seatAngle(next), spinTarget);
+    if (compass) compass.base += target - spinTarget;
+    setSpin(target);
+  }
+  function ctlMessage(text) {
+    const el = $("#boardCtlMsg");
+    el.textContent = text;
+    el.hidden = !text;
+    clearTimeout(ctlMsgTimer);
+    if (text) ctlMsgTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  }
+  // Gyroscope : quand le Conteur tourne sur lui-même, la vue tourne d'autant en sens inverse
+  function onOrientation(e) {
+    if (!compass || e.alpha == null) return;
+    const heading = -e.alpha * Math.PI / 180;
+    if (compass.ref == null) { compass.ref = heading; ctlMessage("Boussole active : le joueur en haut est celui en face de toi."); }
+    setSpin(compass.base - angleDiff(heading, compass.ref));
+  }
+  function stopCompass() {
+    window.removeEventListener("deviceorientation", onOrientation);
+    compass = null;
+  }
+  function startCompass() {
+    const fail = (why) => { stopCompass(); renderBoard(); ctlMessage(why + " Utilise les flèches ⟲ ⟳."); };
+    if (typeof DeviceOrientationEvent === "undefined") return fail("Pas de gyroscope sur cet appareil.");
+    compass = { ref: null, base: spinTarget };
+    const listen = () => {
+      if (!compass) return;
+      window.addEventListener("deviceorientation", onOrientation);
+      setTimeout(() => { if (compass && compass.ref == null) fail("Gyroscope indisponible ici."); }, 2000);
+    };
+    // iPhone / iPad : l'accès doit être demandé pendant le toucher
+    if (typeof DeviceOrientationEvent.requestPermission === "function") {
+      DeviceOrientationEvent.requestPermission()
+        .then((r) => (r === "granted" ? listen() : fail("Accès au gyroscope refusé.")))
+        .catch(() => fail("Accès au gyroscope impossible dans cette page."));
+    } else listen();
+    ctlMessage("Tourne-toi face au joueur affiché en haut…");
+  }
+  $("#boardCtl").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.target.closest("[data-lock]")) {
+      state.locked = !state.locked;
+      if (!state.locked) { stopCompass(); setSpin(0); }
+      commit();
+    } else if (e.target.closest("[data-spin]")) {
+      spinSeat(Number(e.target.closest("[data-spin]").dataset.spin));
+    } else if (e.target.closest("[data-compass]")) {
+      if (compass) { stopCompass(); ctlMessage(""); } else startCompass();
+      renderBoard();
+    }
+  });
+  $("#boardCtl").addEventListener("pointerdown", (e) => e.stopPropagation());
+
   // Glisser-déposer (souris et tactile)
   let drag = null;
   board.addEventListener("pointerdown", (e) => {
     const el = e.target.closest(".token, .reminder");
     justDragged = false;
-    if (!el || e.target.closest(".rem-del")) return;
+    if (!el || state.locked || e.target.closest(".rem-del")) return;
     const isToken = el.classList.contains("token");
     const item = (isToken ? state.tokens : state.reminders).find((i) => i.uid === el.dataset.uid);
     if (!item) return;
@@ -303,7 +420,8 @@
   function magnetTarget(x, y) {
     let best = null, bestD = state.tokenSize * 0.9;
     for (const t of state.tokens) {
-      const d = Math.hypot((t.x / 100) * board.clientWidth - x, (t.y / 100) * board.clientHeight - y);
+      const v = viewPos(t);
+      const d = Math.hypot((v.x / 100) * board.clientWidth - x, (v.y / 100) * board.clientHeight - y);
       if (d < bestD) { best = t; bestD = d; }
     }
     return best;

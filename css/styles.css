@@ -1249,10 +1249,59 @@ body.is-day .night-only, body:not(.is-day) .day-only { display: none; }
 .roster-actions .hint { margin: 0; }
 .roster-chips { margin-top: 8px; }
 
+/* ───────── Plateau figé et vue tournante ───────── */
+.board-ctl {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 12;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.board-ctl .btn { background: rgba(20, 16, 28, 0.82); backdrop-filter: blur(4px); }
+.board-ctl .btn.on { border-color: var(--gold); color: var(--gold); }
+.board-ctl-msg {
+  position: absolute;
+  top: 56px;
+  right: 14px;
+  z-index: 12;
+  max-width: min(320px, calc(100% - 28px));
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(20, 16, 28, 0.9);
+  border: 1px solid var(--line-strong);
+  font-size: 14.5px;
+  pointer-events: none;
+}
+.board-ctl-msg[hidden] { display: none; }
+@media (max-width: 760px) {
+  .board-ctl { top: 8px; right: 8px; flex-direction: column; }
+  .board-ctl .btn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; }
+  .board-ctl .ctl-label { display: none; }
+  .board-ctl-msg { top: 8px; right: 56px; max-width: calc(100% - 72px); }
+}
+.board.locked .token, .board.locked .reminder { cursor: pointer; }
+.token.facing::before {
+  content: "▼";
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translate(-50%, -2px);
+  color: var(--gold);
+  font-size: 18px;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
 /* ───────── Grimoire montré à l'Espion ───────── */
 .spy-view-close { display: none; }
 body.spy-view .topbar,
 body.spy-view .night-rail,
+body.spy-view .board-ctl,
+body.spy-view .board-ctl-msg,
 body.spy-view .panel,
 body.spy-view .player-tag,
 body.spy-view .rem-del { display: none !important; }
