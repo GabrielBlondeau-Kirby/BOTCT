@@ -1237,6 +1237,18 @@ body.is-day .night-only, body:not(.is-day) .day-only { display: none; }
   .tr-cards, .tr-history-head { padding-left: 16px; padding-right: 16px; }
 }
 
+/* ───────── Joueurs ───────── */
+.roster { list-style: none; margin: 0 0 12px; padding: 0; }
+.roster li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.roster-num { flex: none; width: 24px; color: var(--muted); font-size: 14px; text-align: right; }
+.roster-name { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.roster-name small { font-size: 13.5px; }
+.roster-name small:not([class]) { color: var(--muted); }
+.roster .icon-btn:disabled { opacity: 0.3; }
+.roster-actions { display: grid; gap: 8px; justify-items: start; }
+.roster-actions .hint { margin: 0; }
+.roster-chips { margin-top: 8px; }
+
 /* ───────── Grimoire montré à l'Espion ───────── */
 .spy-view-close { display: none; }
 body.spy-view .topbar,

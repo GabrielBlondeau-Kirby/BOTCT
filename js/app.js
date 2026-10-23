@@ -37,6 +37,7 @@
     setup: null,     // composition figée à la fin de la 1re nuit
     ended: null,     // { winner: "good" | "evil", phase }
     trial: null,     // jugements du jour en cours : { phase, mode, list: [{ by, target, votes, fate }] }
+    roster: [],      // prénoms des joueurs, dans l'ordre autour de la table (conservés entre les parties)
   });
 
   let state = load();
@@ -399,6 +400,8 @@
           <span>Joueur</span>
           <input type="text" id="playerInput" value="${escapeHtml(t.player)}" placeholder="Prénom du joueur" autocomplete="off">
         </label>
+        ${state.roster.length ? `<div class="chips roster-chips">${state.roster.filter((n) => n === t.player || !state.tokens.some((x) => x.player === n)).map((n) =>
+          `<button class="chip ${n === t.player ? "on" : ""}" data-roster-pick="${escapeHtml(n)}" aria-pressed="${n === t.player}">${escapeHtml(n)}</button>`).join("") || `<span class="hint">Tous les joueurs ont un rôle.</span>`}</div>` : ""}
         <div class="toggles">
           <button class="toggle ${t.dead ? "on" : ""}" data-toggle="dead">${t.dead ? "☠ Mort" : "♥ Vivant"}</button>
           <button class="toggle ${t.ghostUsed ? "on" : ""}" data-toggle="ghostUsed" ${t.dead ? "" : "disabled"}>
@@ -450,6 +453,10 @@
     } else if (e.target.closest("[data-align]")) {
       setAlign(t, alignOf(t) === "good" ? "evil" : "good");
       logEvent("align", { who: who(t), align: alignOf(t) });
+      commit(); renderSheet();
+    } else if (e.target.closest("[data-roster-pick]")) {
+      const name = e.target.closest("[data-roster-pick]").dataset.rosterPick;
+      t.player = t.player === name ? "" : name;
       commit(); renderSheet();
     } else if (remChip) {
       toggleReminder(t, remChip.dataset.remRole || null, remChip.dataset.remLabel);
@@ -510,12 +517,13 @@
 
   function renderPanel() {
     if (!currentPanel) return;
-    const titles = { roles: "Rôles en jeu", night: "Ordre de nuit", rules: "Règles rapides", journal: "Journal de partie" };
+    const titles = { players: "Joueurs", roles: "Rôles en jeu", night: "Ordre de nuit", rules: "Règles rapides", journal: "Journal de partie" };
     $("#panelTitle").textContent = titles[currentPanel];
     const body = $("#panelBody");
     const scroll = body.scrollTop;
     const listScroll = $("#rpList")?.scrollTop || 0;
     panel.classList.toggle("wide", currentPanel === "roles");
+    if (currentPanel === "players") body.innerHTML = playersPanel();
     if (currentPanel === "roles") body.innerHTML = rolesPanel();
     if (currentPanel === "night") body.innerHTML = nightPanel();
     if (currentPanel === "rules") body.innerHTML = rulesPanel();
@@ -1646,6 +1654,42 @@
     return [...groups.entries()].sort((x, y) => x[0] - y[0]);
   }
 
+  // ───────── Joueurs : liste de prénoms à attribuer aux jetons ─────────
+  // Les jetons dans l'ordre autour de la table, en partant du haut, dans le sens des aiguilles d'une montre
+  const tableOrder = () => [...state.tokens].sort((a, b) => {
+    const ang = (t) => (Math.atan2(t.y - 51, t.x - 50) + Math.PI / 2 + 2 * Math.PI) % (2 * Math.PI);
+    return ang(a) - ang(b);
+  });
+  function playersPanel() {
+    const r = state.roster;
+    const seated = tableOrder().filter((t) => ROLES[t.roleId].team !== "traveller");
+    return `
+      <form class="journal-form" id="rosterForm">
+        <p class="journal-label">Ajouter des joueurs</p>
+        <div class="custom-rem">
+          <input type="text" id="rosterInput" placeholder="Prénoms, séparés par des virgules" autocomplete="off">
+          <button class="btn" type="submit">Ajouter</button>
+        </div>
+      </form>
+      ${r.length ? `
+        <ol class="roster">${r.map((n, i) => {
+          const t = state.tokens.find((x) => x.player === n);
+          return `<li>
+            <span class="roster-num">${i + 1}</span>
+            <span class="roster-name"><b>${escapeHtml(n)}</b>${t ? `<small class="team-text-${ROLES[t.roleId].team}">${escapeHtml(ROLES[t.roleId].name)}</small>` : `<small>sans rôle</small>`}</span>
+            <button class="icon-btn" data-roster-up="${i}" ${i ? "" : "disabled"} aria-label="Monter ${escapeHtml(n)}">↑</button>
+            <button class="icon-btn" data-roster-del="${i}" aria-label="Retirer ${escapeHtml(n)}">✕</button>
+          </li>`;
+        }).join("")}</ol>
+        <div class="roster-actions">
+          ${seated.length ? `<button class="btn primary" data-roster-seat>Attribuer autour de la table</button>
+            <p class="hint">Dans l'ordre de la liste : le joueur 1 reçoit le jeton du haut, puis dans le sens des aiguilles d'une montre. Les prénoms déjà saisis sont remplacés.</p>` : ""}
+          ${r.length >= 5 && r.length <= 20 && r.length !== state.players ? `<button class="btn" data-roster-count>Partie à ${r.length} joueurs</button>` : ""}
+          <button class="btn ghost danger small" data-roster-clear>Vider la liste</button>
+        </div>`
+      : `<p class="hint">Saisis les prénoms dans l'ordre où les joueurs sont assis. La liste est gardée pour les parties suivantes. Ensuite, touche un prénom dans la fiche d'un jeton, ou attribue-les tous autour de la table.</p>`}`;
+  }
+
   function journalPanel() {
     const groups = groupedLog();
     return `
@@ -2089,6 +2133,23 @@
       state.ended = null;
       state.log = state.log.filter((x) => x.type !== "end");
       commit();
+    } else if (e.target.closest("[data-roster-up]")) {
+      const i = Number(e.target.closest("[data-roster-up]").dataset.rosterUp);
+      [state.roster[i - 1], state.roster[i]] = [state.roster[i], state.roster[i - 1]];
+      commit();
+    } else if (e.target.closest("[data-roster-del]")) {
+      state.roster.splice(Number(e.target.closest("[data-roster-del]").dataset.rosterDel), 1);
+      commit();
+    } else if (e.target.closest("[data-roster-seat]")) {
+      const seated = tableOrder().filter((t) => ROLES[t.roleId].team !== "traveller");
+      seated.forEach((t, i) => { if (i < state.roster.length) t.player = state.roster[i]; });
+      commit();
+    } else if (e.target.closest("[data-roster-count]")) {
+      state.players = state.roster.length;
+      commit();
+    } else if (e.target.closest("[data-roster-clear]")) {
+      state.roster = [];
+      commit();
     } else if (e.target.closest("[data-clear-checks]")) {
       state.nightChecks = [];
       commit();
@@ -2096,6 +2157,12 @@
   });
   panel.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (e.target.id === "rosterForm") {
+      const names = $("#rosterInput").value.split(/[,;\n]/).map((n) => n.trim()).filter(Boolean);
+      for (const n of names) if (!state.roster.some((x) => x.toLowerCase() === n.toLowerCase())) state.roster.push(n);
+      commit();
+      $("#rosterInput").focus();
+    }
     if (e.target.id === "noteForm") {
       const text = $("#noteInput").value.trim();
       if (!text) return;
@@ -2164,8 +2231,8 @@
     resetTimer = null;
     btn.textContent = "Nouvelle partie";
     btn.classList.remove("confirming");
-    const { players, tokenSize, filter } = state;
-    state = { ...defaultState(), players, tokenSize, filter };
+    const { players, tokenSize, filter, roster } = state;
+    state = { ...defaultState(), players, tokenSize, filter, roster };
     trialDraft = { by: null, target: null, votes: 0 };
     undo = null;
     trial.open && trial.close();
@@ -2182,6 +2249,7 @@
   function render() {
     $("#phaseLabel").textContent = phaseLabel(state.phase);
     $("#roleCount").textContent = state.tokens.length;
+    $("#rosterCount").textContent = state.roster.length;
     $("#sizeRange").value = state.tokenSize;
     document.body.classList.toggle("is-day", !isNight());
     renderRail();
