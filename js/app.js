@@ -83,9 +83,24 @@
     return { x: 50 + rx * Math.cos(angle), y: 51 + ry * Math.sin(angle) };
   }
 
+  // Remet les jetons en cercle régulier en gardant l'ordre où ils sont assis,
+  // avec la rotation qui les déplace le moins
   function arrangeCircle() {
     const n = state.tokens.length;
-    state.tokens.forEach((t, i) => Object.assign(t, circleSlot(i, n)));
+    if (!n) return;
+    const angleOf = (t) => Math.atan2((t.y - 51) / 36, (t.x - 50) / 38);
+    const ring = [...state.tokens].sort((a, b) => angleOf(a) - angleOf(b));
+    let sx = 0, sy = 0;
+    ring.forEach((t, i) => {
+      const d = angleOf(t) - (i / n) * Math.PI * 2;
+      sx += Math.cos(d); sy += Math.sin(d);
+    });
+    const offset = Math.atan2(sy, sx);
+    ring.forEach((t, i) => {
+      const angle = offset + (i / n) * Math.PI * 2;
+      t.x = 50 + 38 * Math.cos(angle);
+      t.y = 51 + 36 * Math.sin(angle);
+    });
     commit();
   }
 
