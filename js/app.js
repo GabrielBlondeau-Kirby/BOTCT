@@ -992,6 +992,11 @@
         run() { placeReminder(t, "bonecollector", "A sa capacité"); placeReminder(me, "bonecollector", "Sans pouvoir"); },
       },
     },
+    spy: {
+      plan() {
+        return { note: "Le plateau s'affiche en plein écran, sans les prénoms ni les panneaux.", button: "Montrer le grimoire", show: "grimoire" };
+      },
+    },
     chef: {
       plan(me) {
         const ring = seats();
@@ -1491,8 +1496,16 @@
       if (!plan.stay) act = { key: null, picks: [], role: "", init: false };
       commit();
     }
-    if (plan.show) openShow(plan.show);
+    if (plan.show === "grimoire") openSpyView();
+    else if (plan.show) openShow(plan.show);
   }
+
+  // ───────── Grimoire montré à l'Espion : le plateau seul, sans prénoms ─────────
+  function openSpyView() {
+    document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+    document.body.classList.add("spy-view");
+  }
+  $("#spyViewClose").addEventListener("click", () => document.body.classList.remove("spy-view"));
 
   // ───────── Écran plein écran à montrer aux joueurs (sans nom de joueur) ─────────
   const showDialog = $("#bluffShow");
