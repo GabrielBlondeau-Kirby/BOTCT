@@ -708,6 +708,16 @@ body:not(.rail-open) .night-rail {
 .ev-del:hover { opacity: 1; background: var(--surface-3); }
 .journal-end { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line-strong); display: grid; gap: 8px; justify-items: start; }
 .end-choice { display: flex; flex-wrap: wrap; gap: 8px; }
+.saves { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line-strong); display: grid; gap: 8px; }
+.saves .hint { margin: 0; }
+.saves-msg { color: var(--gold) !important; }
+.saves-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.saves-actions label.btn { cursor: pointer; }
+.saves-list { list-style: none; margin: 0; padding: 0; }
+.saves-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.saves-list li.current .saves-text b { color: var(--gold); }
+.saves-text { flex: 1; min-width: 0; display: grid; line-height: 1.3; }
+.saves-text small { color: var(--muted); font-size: 13.5px; }
 .end-good { border-color: var(--townsfolk); color: #a9c8f2; }
 .end-evil { border-color: var(--demon); color: #f0a197; }
 

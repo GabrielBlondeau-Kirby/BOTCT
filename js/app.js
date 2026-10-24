@@ -40,6 +40,7 @@
     roster: [],      // prénoms des joueurs, dans l'ordre autour de la table (conservés entre les parties)
     locked: false,   // plateau figé : les jetons ne se déplacent plus, la vue peut tourner
     shareFormat: "whatsapp", // dernier format de partage du journal
+    gameId: uid(),   // identifiant de la partie dans les sauvegardes
   });
 
   let state = load();
@@ -1855,7 +1856,102 @@
                <button class="btn end-good" data-end="good">Victoire du Bien</button>
                <button class="btn end-evil" data-end="evil">Victoire du Mal</button>
              </div>`}
+      </div>
+      ${savesSection()}`;
+  }
+
+  // ───────── Parties sauvegardées ─────────
+  // Gardées dans le navigateur, à part de la partie en cours. Les réglages (liste de joueurs,
+  // taille des jetons…) ne font pas partie d'une partie : ils restent quand on en ouvre une autre.
+  const ARCHIVE_KEY = "botc-archive-v1";
+  const PREF_KEYS = ["players", "tokenSize", "filter", "roster", "shareFormat", "railHidden", "locked"];
+  const prefs = () => Object.fromEntries(PREF_KEYS.map((k) => [k, state[k]]));
+  let pendingDelete = null, savesMsg = "";
+  function loadArchive() {
+    try { return JSON.parse(localStorage.getItem(ARCHIVE_KEY)) || []; } catch (e) { return []; }
+  }
+  function storeArchive(list) {
+    try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(list)); return true; } catch (e) { return false; }
+  }
+  const hasContent = () => state.tokens.length > 0 || state.log.length > 0;
+  // Ajoute ou met à jour la partie en cours dans les sauvegardes
+  function archiveGame() {
+    if (!hasContent()) return false;
+    const game = { ...state };
+    for (const k of PREF_KEYS) delete game[k];
+    game.trial = null;
+    const entry = { id: state.gameId, savedAt: Date.now(), game };
+    const list = loadArchive().filter((g) => g.id !== entry.id);
+    return storeArchive([entry, ...list]);
+  }
+  function openGame(id) {
+    const entry = loadArchive().find((g) => g.id === id);
+    if (!entry) return;
+    archiveGame();
+    state = { ...defaultState(), ...entry.game, ...prefs(), gameId: entry.id };
+    trialDraft = { by: null, target: null, votes: 0 };
+    undo = null;
+    trial.open && trial.close();
+    sheet.open && sheet.close();
+  }
+  function gameSummary(g) {
+    const start = g.setup || g.tokens.map((t) => ({ roleId: t.roleId }));
+    const n = start.filter((x) => ROLES[x.roleId]?.team !== "traveller").length;
+    const demon = start.find((x) => ROLES[x.roleId]?.team === "demon");
+    return {
+      result: g.ended ? (g.ended.winner === "good" ? "😇 Victoire du Bien" : "😈 Victoire du Mal") : `⏳ En cours · ${phaseName(g.phase)}`,
+      detail: [plural(n, "joueur"), demon && ROLES[demon.roleId].name].filter(Boolean).join(" · "),
+    };
+  }
+  const savedDate = (ms) => new Date(ms).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  function savesSection() {
+    const list = loadArchive();
+    return `
+      <div class="saves">
+        <p class="journal-label">Parties sauvegardées</p>
+        <p class="hint">Sauvegarde automatique à la fin de partie, avant une nouvelle partie et avant d'en ouvrir une autre.</p>
+        <div class="saves-actions">
+          <button class="btn small" data-save-game ${hasContent() ? "" : "disabled"}>💾 Sauvegarder maintenant</button>
+        </div>
+        ${savesMsg ? `<p class="hint saves-msg">${escapeHtml(savesMsg)}</p>` : ""}
+        ${list.length ? `<ul class="saves-list">${list.map((g) => {
+          const sum = gameSummary(g.game), current = g.id === state.gameId;
+          return `<li class="${current ? "current" : ""}">
+            <span class="saves-text"><b>${sum.result}</b><small>${savedDate(g.savedAt)} · ${escapeHtml(sum.detail)}${current ? " · partie affichée" : ""}</small></span>
+            ${current ? "" : `<button class="btn small" data-open-game="${g.id}">Ouvrir</button>`}
+            <button class="btn small ghost danger ${pendingDelete === g.id ? "confirming" : ""}" data-del-game="${g.id}" aria-label="Supprimer cette sauvegarde">${pendingDelete === g.id ? "Supprimer ?" : "✕"}</button>
+          </li>`;
+        }).join("")}</ul>` : `<p class="hint">Aucune partie sauvegardée.</p>`}
+        <div class="saves-actions">
+          <button class="btn small ghost" data-export-games ${list.length ? "" : "disabled"}>Exporter (fichier)</button>
+          <label class="btn small ghost">Importer<input type="file" id="importGames" accept=".json,application/json" hidden></label>
+        </div>
       </div>`;
+  }
+  function exportGames() {
+    const blob = new Blob([JSON.stringify({ app: "grimoire", version: 1, games: loadArchive() }, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `grimoire-parties-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  // Fusionne un export : pour une même partie, la sauvegarde la plus récente l'emporte
+  function importGames(text) {
+    let games;
+    try { games = JSON.parse(text).games; } catch (e) { games = null; }
+    if (!Array.isArray(games)) return "Fichier non reconnu.";
+    const valid = games.filter((g) => g && g.id && g.game && Array.isArray(g.game.tokens));
+    const byId = new Map(loadArchive().map((g) => [g.id, g]));
+    let added = 0;
+    for (const g of valid) {
+      const mine = byId.get(g.id);
+      if (!mine || g.savedAt > mine.savedAt) { byId.set(g.id, g); added++; }
+    }
+    storeArchive([...byId.values()].sort((a, b) => b.savedAt - a.savedAt));
+    return `${added} partie${added > 1 ? "s" : ""} importée${added > 1 ? "s" : ""}.`;
   }
 
   // ───────── Jugements de la journée ─────────
@@ -2349,6 +2445,7 @@
       if (!state.setup) state.setup = state.tokens.map((t) => ({ roleId: t.roleId, player: t.player || "" }));
       state.ended = { winner: e.target.closest("[data-end]").dataset.end, phase: state.phase };
       logEvent("end", { winner: state.ended.winner });
+      archiveGame();
       commit();
       openRecap();
     } else if (e.target.closest("[data-recap]")) {
@@ -2374,6 +2471,25 @@
     } else if (e.target.closest("[data-roster-clear]")) {
       state.roster = [];
       commit();
+    } else if (e.target.closest("[data-save-game]")) {
+      savesMsg = archiveGame() ? "Partie sauvegardée." : "Sauvegarde impossible : stockage du navigateur indisponible ou plein.";
+      pendingDelete = null;
+      renderPanel();
+    } else if (e.target.closest("[data-open-game]")) {
+      openGame(e.target.closest("[data-open-game]").dataset.openGame);
+      savesMsg = "Partie ouverte. La précédente a été sauvegardée.";
+      pendingDelete = null;
+      commit();
+    } else if (e.target.closest("[data-del-game]")) {
+      const id = e.target.closest("[data-del-game]").dataset.delGame;
+      if (pendingDelete === id) {
+        storeArchive(loadArchive().filter((g) => g.id !== id));
+        pendingDelete = null;
+        savesMsg = "Sauvegarde supprimée.";
+      } else pendingDelete = id;
+      renderPanel();
+    } else if (e.target.closest("[data-export-games]")) {
+      exportGames();
     } else if (e.target.closest("[data-clear-checks]")) {
       state.nightChecks = [];
       commit();
@@ -2393,6 +2509,13 @@
       logEvent("note", { text });
       commit();
     }
+  });
+  panel.addEventListener("change", (e) => {
+    if (e.target.id !== "importGames" || !e.target.files[0]) return;
+    e.target.files[0].text().then((text) => {
+      savesMsg = importGames(text);
+      renderPanel();
+    });
   });
   panel.addEventListener("input", (e) => {
     if (e.target.id !== "roleSearch") return;
@@ -2456,8 +2579,8 @@
     resetTimer = null;
     btn.textContent = "Nouvelle partie";
     btn.classList.remove("confirming");
-    const { players, tokenSize, filter, roster, shareFormat } = state;
-    state = { ...defaultState(), players, tokenSize, filter, roster, shareFormat };
+    archiveGame();
+    state = { ...defaultState(), ...prefs() };
     trialDraft = { by: null, target: null, votes: 0 };
     undo = null;
     trial.open && trial.close();
