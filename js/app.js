@@ -1928,11 +1928,25 @@
         </div>
       </div>`;
   }
-  function exportGames() {
-    const blob = new Blob([JSON.stringify({ app: "grimoire", version: 1, games: loadArchive() }, null, 1)], { type: "application/json" });
+  async function exportGames() {
+    const data = JSON.stringify({ app: "grimoire", version: 1, games: loadArchive() }, null, 1);
+    const filename = `grimoire-parties-${new Date().toISOString().slice(0, 10)}.json`;
+    // Dans l'aperçu claude.ai, un fichier ne peut être proposé qu'à travers le visualiseur
+    const downloads = window.claude?.use ? await window.claude.use("downloads") : null;
+    if (downloads) {
+      try {
+        await downloads.save({ filename, data });
+        savesMsg = "Fichier exporté.";
+      } catch (err) {
+        savesMsg = err?.code === "declined" ? "" : "Export impossible ici.";
+      }
+      renderPanel();
+      return;
+    }
+    const blob = new Blob([data], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `grimoire-parties-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
