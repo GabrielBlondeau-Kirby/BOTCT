@@ -966,6 +966,18 @@
     }
     return [...dead.values()];
   }
+  // Jetons des joueurs exécutés pendant une phase (mort par le Démon ou autre exclue)
+  function executedOn(phase) {
+    const out = [];
+    for (const e of state.log) {
+      if (e.phase !== phase || e.type !== "nomination" || !e.executed) continue;
+      const w = e.virgin ? e.by : e.target;
+      const t = w && (state.tokens.find((x) => x.player && x.player === w.player && x.roleId === w.roleId)
+        || state.tokens.find((x) => x.player && x.player === w.player) || state.tokens.find((x) => x.roleId === w.roleId));
+      if (t && !out.includes(t)) out.push(t);
+    }
+    return out;
+  }
   // Ordre des places : angle de chaque jeton autour du centre du plateau
   const seats = () => [...state.tokens].sort((a, b) => Math.atan2(a.y - 51, a.x - 50) - Math.atan2(b.y - 51, b.x - 50));
   function aliveNeighbours(t) {
@@ -1223,15 +1235,17 @@
     },
     librarian: pairInfo("outsider", "Étranger"),
     investigator: pairInfo("minion", "Sbire"),
-    undertaker: revealOf("Joueur exécuté aujourd'hui", "Le joueur exécuté était", () => state.tokens.filter((t) => t.dead), {
-      opts: {
-        defaultPicks() {
-          const e = state.log.findLast((x) => x.type === "nomination" && x.executed && x.phase === state.phase - 1);
-          const t = e && (state.tokens.find((x) => x.player && x.player === e.target.player) || state.tokens.find((x) => x.roleId === e.target.roleId));
-          return t ? [t.uid] : [];
-        },
-      },
-    }),
+    undertaker: (() => {
+      const base = revealOf("Joueur exécuté aujourd'hui", "Le joueur exécuté était", () => executedOn(state.phase - 1));
+      return {
+        ...base,
+        roles: () => (executedOn(state.phase - 1).length ? base.roles() : []),
+        defaultPicks: () => executedOn(state.phase - 1).slice(-1).map((t) => t.uid),
+        plan: (me, picks, role, rid) => executedOn(state.phase - 1).length
+          ? base.plan(me, picks, role, rid)
+          : { note: "Personne n'a été exécuté aujourd'hui : le Croque-mort ne se réveille pas." },
+      };
+    })(),
     ravenkeeper: revealOf("Joueur désigné", "Ce joueur est"),
     harlot: revealOf("Joueur désigné (s'il accepte)", "Ce joueur est"),
     // tous les joueurs sont proposés : une Grand-mère ivre ou empoisonnée peut recevoir un joueur Mauvais
