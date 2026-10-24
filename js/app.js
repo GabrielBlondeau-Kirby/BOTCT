@@ -39,6 +39,7 @@
     trial: null,     // jugements du jour en cours : { phase, mode, list: [{ by, target, votes, fate }] }
     roster: [],      // prénoms des joueurs, dans l'ordre autour de la table (conservés entre les parties)
     locked: false,   // plateau figé : les jetons ne se déplacent plus, la vue peut tourner
+    shareFormat: "whatsapp", // dernier format de partage du journal
   });
 
   let state = load();
@@ -1827,6 +1828,7 @@
     const groups = groupedLog();
     return `
       ${isNight() ? "" : `<button class="btn primary journal-trial" data-trial>${GAVEL} Jugements · ${phaseName(state.phase)}</button>`}
+      ${state.log.length ? `<button class="btn journal-share" data-share>📤 Partager le journal</button>` : ""}
       <form class="journal-form" id="noteForm">
         <p class="journal-label">Note libre</p>
         <textarea id="noteInput" rows="2" placeholder="Ex. : Léo prétend être le Cuisinier, il annonce 1."></textarea>
@@ -2120,13 +2122,21 @@
     const lastPhase = state.ended?.phase ?? state.phase;
     return { start, lastPhase, groups: groupedLog() };
   }
+  function recapStats(lastPhase) {
+    const executions = state.log.filter((e) => e.type === "nomination" && e.executed).length;
+    return {
+      nights: Math.floor(lastPhase / 2) + 1,
+      days: Math.floor((lastPhase + 1) / 2),
+      executions,
+      deaths: state.log.filter((e) => e.type === "death").length + executions,
+    };
+  }
+  const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
   function openRecap() {
     const { start, lastPhase, groups } = recapData();
     const good = state.ended?.winner === "good";
-    const nights = Math.floor(lastPhase / 2) + 1, days = Math.floor((lastPhase + 1) / 2);
+    const { nights, days, executions, deaths } = recapStats(lastPhase);
     const finalOf = (s) => state.tokens.find((t) => t.roleId === s.roleId);
-    const executions = state.log.filter((e) => e.type === "nomination" && e.executed).length;
-    const deaths = state.log.filter((e) => e.type === "death").length + executions;
     const teams = ["townsfolk", "outsider", "minion", "demon", "traveller"];
     $("#recapBody").innerHTML = `
       <button class="icon-btn recap-close" data-recap-close aria-label="Fermer">✕</button>
@@ -2164,45 +2174,126 @@
       </section>
 
       <div class="recap-actions">
-        <button class="btn" data-recap-copy>Copier le récit</button>
+        <button class="btn" data-share>📤 Partager le récit</button>
         <button class="btn primary" data-recap-close>Fermer</button>
-      </div>
-      <textarea class="recap-text" id="recapText" readonly hidden></textarea>`;
+      </div>`;
     if (!recap.open) recap.showModal();
     recap.querySelector(".recap-inner").scrollTop = 0;
   }
-  function recapPlainText() {
-    const { start, groups } = recapData();
-    const lines = [];
-    lines.push(state.ended ? (state.ended.winner === "good" ? "VICTOIRE DU BIEN" : "VICTOIRE DU MAL") : "PARTIE EN COURS", "");
-    lines.push("Grimoire :");
-    for (const s of start) {
-      const fin = state.tokens.find((t) => t.roleId === s.roleId);
-      lines.push(`- ${fin?.player || s.player || "—"} : ${ROLES[s.roleId].name} (${TEAMS[ROLES[s.roleId].team].label})${fin?.dead ? " — mort" : ""}`);
-    }
-    if (state.bluffs.length) lines.push(`Bluffs : ${state.bluffs.map((id) => ROLES[id].name).join(", ")}`);
-    for (const [ph, events] of groups) {
-      lines.push("", phaseName(ph).toUpperCase());
-      const wakes = events.filter((e) => e.type === "wake");
-      for (const e of events.filter((e) => e.type !== "wake")) lines.push("- " + plain(describe(e)));
-      if (wakes.length) lines.push("- Réveils : " + wakes.map((e) => whoText(e.who)).join(" → "));
-    }
-    return lines.join("\n");
-  }
   recap.addEventListener("click", (e) => {
-    if (e.target.closest("[data-recap-close]")) { recap.close(); return; }
-    const copy = e.target.closest("[data-recap-copy]");
-    if (copy) {
-      const text = recapPlainText();
-      const done = () => { copy.textContent = "Récit copié"; setTimeout(() => (copy.textContent = "Copier le récit"), 2000); };
-      const fallback = () => {
-        const ta = $("#recapText");
-        ta.hidden = false;
-        ta.value = text;
-        ta.select();
-        copy.textContent = "Sélectionnez puis copiez le texte ci-dessous";
-      };
-      try { navigator.clipboard.writeText(text).then(done, fallback); } catch (err) { fallback(); }
+    if (e.target.closest("[data-recap-close]")) recap.close();
+  });
+
+  // ───────── Partage du journal : texte mis en forme selon l'app de destination ─────────
+  const shareDialog = $("#share");
+  const SHARE_FORMATS = {
+    whatsapp: { label: "WhatsApp", hint: "Aussi pour Signal et Telegram : *gras*, _italique_ et emoji.",
+      bold: (x) => `*${x}*`, title: (x) => `*${x}*`, em: (x) => `_${x}_`, bullet: "•" },
+    discord: { label: "Discord", hint: "Markdown : titres et **gras**. Discord coupe à 2000 caractères par message.",
+      bold: (x) => `**${x}**`, title: (x) => `### ${x}`, em: (x) => `*${x}*`, bullet: "-", limit: 2000 },
+    text: { label: "Texte simple", hint: "SMS, e-mail, Notes : pas de mise en forme, seulement des emoji.",
+      bold: (x) => x, title: (x) => x.toUpperCase(), em: (x) => x, bullet: "•" },
+  };
+  const TEAM_EMOJI = { townsfolk: "🔵", outsider: "🟢", minion: "🟠", demon: "🔴", traveller: "🟣" };
+  const EVENT_EMOJI = { death: "💀", revive: "💫", ghost: "👻", "ghost-back": "👻", "rem-add": "📌", "rem-move": "📌", "rem-remove": "📌",
+    bluffs: "🃏", "role-add": "➕", "role-remove": "➖", "role-change": "🎭", "role-swap": "🔄", note: "📝", end: "🏆" };
+  // Rappels et réveils : utiles au Conteur, bavards pour les joueurs
+  const DETAIL_EVENTS = new Set(["rem-add", "rem-move", "rem-remove", "wake"]);
+  let shareDetails = false;
+  const eventEmoji = (e) => e.type === "nomination" ? (e.executed || e.virgin ? "🪓" : "⚖️")
+    : e.type === "align" ? (e.align === "evil" ? "😈" : "😇") : EVENT_EMOJI[e.type] || "•";
+
+  function shareText(fmt, details) {
+    const { start, lastPhase, groups } = recapData();
+    const { nights, days, executions, deaths } = recapStats(lastPhase);
+    const line = (html) => plain(html.replace(/[☠♥✎]\s*/g, "").replace(/<b[^>]*>(.*?)<\/b>/g, (_, x) => fmt.bold(x)));
+    const L = [fmt.title("🩸 Blood on the Clocktower")];
+    L.push(!state.ended ? `⏳ ${fmt.bold("Partie en cours")}`
+      : state.ended.winner === "good" ? `😇 ${fmt.bold("Victoire du Bien")}` : `😈 ${fmt.bold("Victoire du Mal")}`);
+    L.push(`👥 ${start.length} joueurs · 🌙 ${plural(nights, "nuit")} · ☀️ ${plural(days, "jour")} · 💀 ${plural(deaths, "mort")} · 🪓 ${plural(executions, "exécution")}`);
+    L.push("", fmt.title("📜 Le Grimoire"));
+    for (const team of ["townsfolk", "outsider", "minion", "demon", "traveller"]) {
+      const cast = start.filter((x) => ROLES[x.roleId]?.team === team);
+      if (!cast.length) continue;
+      L.push(`${TEAM_EMOJI[team]} ${fmt.em(TEAMS[team].plural)}`);
+      for (const x of cast) {
+        const fin = state.tokens.find((t) => t.roleId === x.roleId);
+        const name = fin?.player || x.player;
+        L.push(`${fmt.bullet} ${name ? `${fmt.bold(name)} — ` : ""}${ROLES[x.roleId].name}${!fin ? " (parti)" : fin.dead ? " 💀" : ""}`);
+      }
+    }
+    if (state.bluffs.length) L.push(`🃏 ${fmt.em("Bluffs du Démon")} : ${state.bluffs.map((id) => ROLES[id].name).join(", ")}`);
+    const phases = groups.map(([ph, events]) => [ph, events.filter((e) => details || !DETAIL_EVENTS.has(e.type))]).filter(([, ev]) => ev.length);
+    if (phases.length) L.push("", fmt.title("🕰️ Chronologie"));
+    for (const [ph, events] of phases) {
+      L.push("", `${ph % 2 === 0 ? "🌙" : "☀️"} ${fmt.bold(phaseName(ph))}`);
+      for (const e of events.filter((e) => e.type !== "wake")) L.push(`${eventEmoji(e)} ${line(describe(e))}`);
+      const wakes = events.filter((e) => e.type === "wake");
+      if (wakes.length) L.push(`👁️ Réveils : ${wakes.map((e) => whoText(e.who)).join(" → ")}`);
+    }
+    return L.join("\n");
+  }
+  function openShare() {
+    renderShare();
+    if (!shareDialog.open) shareDialog.showModal();
+  }
+  function renderShare() {
+    const key = SHARE_FORMATS[state.shareFormat] ? state.shareFormat : "whatsapp";
+    const fmt = SHARE_FORMATS[key];
+    const text = shareText(fmt, shareDetails);
+    $("#shareBody").innerHTML = `
+      <button class="icon-btn recap-close" data-share-close aria-label="Fermer">✕</button>
+      <div class="share-head">
+        <h2>Partager le journal</h2>
+        <div class="chips share-formats">${Object.entries(SHARE_FORMATS).map(([k, f]) =>
+          `<button class="chip ${k === key ? "active" : ""}" data-share-format="${k}" aria-pressed="${k === key}">${f.label}</button>`).join("")}</div>
+        <p class="hint">${escapeHtml(fmt.hint)}</p>
+        <label class="share-opt"><input type="checkbox" data-share-details ${shareDetails ? "checked" : ""}> Inclure les rappels et les réveils</label>
+      </div>
+      <textarea class="share-text" id="shareText" spellcheck="false">${escapeHtml(text)}</textarea>
+      <p class="hint share-count" id="shareCount"></p>
+      <div class="recap-actions">
+        ${navigator.share ? `<button class="btn" data-share-native>Partager…</button>` : ""}
+        ${key === "whatsapp" ? `<a class="btn" id="shareWa" target="_blank" rel="noopener">Ouvrir WhatsApp</a>` : ""}
+        <button class="btn primary" data-share-copy>Copier</button>
+      </div>`;
+    syncShare();
+  }
+  // Le texte reste modifiable : compteur et lien WhatsApp suivent ce qui est saisi
+  function syncShare() {
+    const text = $("#shareText").value, limit = SHARE_FORMATS[state.shareFormat]?.limit;
+    $("#shareCount").textContent = `${text.length} caractères` + (limit && text.length > limit ? ` · trop long pour un seul message, à envoyer en plusieurs fois` : "");
+    $("#shareCount").classList.toggle("warn", !!limit && text.length > limit);
+    if ($("#shareWa")) $("#shareWa").href = "https://wa.me/?text=" + encodeURIComponent(text);
+  }
+  function shareFeedback(btn, label) {
+    const old = btn.textContent;
+    btn.textContent = label;
+    setTimeout(() => (btn.textContent = old), 2200);
+  }
+  shareDialog.addEventListener("input", (e) => { if (e.target.id === "shareText") syncShare(); });
+  shareDialog.addEventListener("change", (e) => {
+    if (!e.target.matches("[data-share-details]")) return;
+    shareDetails = e.target.checked;
+    renderShare();
+  });
+  shareDialog.addEventListener("click", (e) => {
+    const text = $("#shareText")?.value || "";
+    const format = e.target.closest("[data-share-format]");
+    const copy = e.target.closest("[data-share-copy]");
+    const native = e.target.closest("[data-share-native]");
+    if (e.target === shareDialog || e.target.closest("[data-share-close]")) shareDialog.close();
+    else if (format) {
+      state.shareFormat = format.dataset.shareFormat;
+      save();
+      renderShare();
+    } else if (copy) {
+      const fallback = () => { $("#shareText").select(); shareFeedback(copy, "Texte sélectionné : copie-le"); };
+      try { navigator.clipboard.writeText(text).then(() => shareFeedback(copy, "Copié ✓"), fallback); } catch (err) { fallback(); }
+    } else if (native) {
+      navigator.share({ text }).catch((err) => {
+        if (err?.name !== "AbortError") shareFeedback(native, "Indisponible ici : copie le texte");
+      });
     }
   });
 
@@ -2335,6 +2426,7 @@
     const p = e.target.closest("[data-panel]");
     if (p) openPanel(p.dataset.panel);
     if (e.target.closest("[data-trial]")) openTrial();
+    if (e.target.closest("[data-share]")) openShare();
   });
   $("#panelClose").addEventListener("click", closePanel);
   $("#phasePrev").addEventListener("click", () => setPhase(state.phase - 1));
@@ -2364,8 +2456,8 @@
     resetTimer = null;
     btn.textContent = "Nouvelle partie";
     btn.classList.remove("confirming");
-    const { players, tokenSize, filter, roster } = state;
-    state = { ...defaultState(), players, tokenSize, filter, roster };
+    const { players, tokenSize, filter, roster, shareFormat } = state;
+    state = { ...defaultState(), players, tokenSize, filter, roster, shareFormat };
     trialDraft = { by: null, target: null, votes: 0 };
     undo = null;
     trial.open && trial.close();
